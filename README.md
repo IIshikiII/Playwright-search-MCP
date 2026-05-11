@@ -28,7 +28,7 @@ A powerful **Google Search integration** powered by Playwright and MCP (Model Co
 │                                                             │
 │  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐ │
 │  │  Playwright  │────>│   Google     │────>│   Parse      │ │
-│  │  Browser     │     │  Search      │     │   HTML       │ │
+│  │  Browser     │     │   Search     │     │   HTML       │ │
 │  └──────────────┘     └──────────────┘     └──────────────┘ │
 │         │                    │                    │         │
 │         │                    ▼                    │         │
