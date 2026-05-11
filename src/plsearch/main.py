@@ -4,6 +4,7 @@ from urllib.parse import quote
 import os
 import logging
 from dotenv import load_dotenv
+import asyncio
 
 load_dotenv()
 
@@ -46,7 +47,7 @@ logging.basicConfig(
 
 logger = logging.getLogger("web_search")
 
-mcp = FastMCP("Web search")
+mcp = FastMCP("Web_search")
 
 profile_path = os.getenv("PROFILE_DIR")
 
@@ -70,9 +71,44 @@ async def run(playwright: Playwright, quety: str):
     await page.goto(f"https://www.google.com/search?q={quote(query)}")
     logger.info(f"Page loaded: {page.url}")
 
+    # Check for CAPTCHA page
+    page_content = await page.content()
+    if 'id="captcha-form"' in page_content or 'id="recaptcha"' in page_content:
+        logger.warning("CAPTCHA detected! Solve it manually in the browser...")
+
+        # Wait for CAPTCHA to be solved by monitoring page state
+        while True:
+            try:
+                # Wait for any navigation to complete
+                await page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                pass  # Continue if no navigation is happening
+            
+            try:
+                new_content = await page.content()
+                # Check if CAPTCHA is gone (no captcha form and recaptcha elements)
+                if 'id="captcha-form"' not in new_content and 'id="recaptcha"' not in new_content:
+                    logger.info("CAPTCHA solved! Continuing...")
+                    break
+            except Exception as e:
+                logger.debug(f"Page content not available yet: {e}")
+                await asyncio.sleep(1)
+
+        # Get fresh page content after CAPTCHA is solved
+        await page.wait_for_load_state("domcontentloaded")
+        page_content = await page.content()
+        results = parse_page(page_content)
+        logger.info(f"Extracted {len(results)} search results")
+
+        await browser.close()
+        logger.info("Browser closed")
+
+        return results
+
     # other actions...
     # with open("test.html", "w", encoding="utf8") as f:
-    #     f.write(page.content())
+    #     f.write(await page.content())
+    # await asyncio.sleep(10)
 
     logger.info("Parsing page content...")
     page_content = await page.content()
