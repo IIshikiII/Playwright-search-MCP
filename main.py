@@ -1,9 +1,13 @@
 from playwright.sync_api import sync_playwright, Playwright
 from time import sleep
 from urllib.parse import quote
+import os
+from dotenv import load_dotenv
+load_dotenv()
+profile_path = os.getenv("PROFILE_DIR")
 
 def run(playwright: Playwright):
-    user_data_dir = r"C:\Users\IshikiI\Desktop\Coding\AI\Claude_setup\playwirght\profile"
+    user_data_dir = profile_path
 
     chromium = playwright.chromium # or "firefox" or "webkit".
     browser = chromium.launch_persistent_context(
