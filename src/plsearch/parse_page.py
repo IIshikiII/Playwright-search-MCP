@@ -6,7 +6,7 @@ logger = logging.getLogger("parse_page")
 
 
 def parse_page(html: str) -> list[dict]:
-    """Extract urls and page descriprions in json format
+    """Extract urls and page descriptions in json format
 
     Args:
         html (str): page content
@@ -22,11 +22,11 @@ def parse_page(html: str) -> list[dict]:
               - ``page_age`` (str): An optional string indicating the age of the
                 page (currently left empty).
     """
-    logger.info("Начало парсинга HTML-содержимого...")
+    logger.debug("Starting HTML parsing...")
     soup = BeautifulSoup(html, "html.parser")
 
     links = list(soup.find_all("a", href=True))
-    logger.debug(f"Найдено {len(links)} ссылок на странице")
+    logger.debug(f"Found {len(links)} links on page")
 
     results = []
     parsed_count = 0
@@ -51,5 +51,5 @@ def parse_page(html: str) -> list[dict]:
             })
             parsed_count += 1
 
-    logger.info(f"Парсинг завершен: извлечено {parsed_count} результатов из {len(links)} ссылок")
+    logger.info(f"Parsing completed: extracted {parsed_count} results from {len(links)} links")
     return results
