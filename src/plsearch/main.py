@@ -52,7 +52,7 @@ mcp = FastMCP("Web_search")
 profile_path = os.getenv("PROFILE_DIR")
 
 
-async def run(playwright: Playwright, quety: str):
+async def run(playwright: Playwright, query: str):
     user_data_dir = profile_path
     logger.info(f"Profile data path: {user_data_dir}")
 
@@ -66,7 +66,7 @@ async def run(playwright: Playwright, quety: str):
     logger.info("Browser successfully started")
 
     page = await browser.new_page()
-    query = quety
+    query = query
     logger.info(f"Executing search query: \"{query}\"")
     await page.goto(f"https://www.google.com/search?q={quote(query)}")
     logger.info(f"Page loaded: {page.url}")
