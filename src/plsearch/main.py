@@ -8,6 +8,7 @@ import asyncio
 load_dotenv()
 
 from plsearch.parse_page import parse_page
+from plsearch.config import CAPTCHA_FORM_ID, RECAPTCHA_ID
 import json
 import sys
 
@@ -84,8 +85,8 @@ async def run(playwright: Playwright, query: str):
 
             try:
                 new_content = await page.content()
-                # Check if CAPTCHA is gone (no captcha form and recaptcha elements)
-                if 'id="captcha-form"' not in new_content and 'id="recaptcha"' not in new_content:
+                # Check if CAPTCHA is gone
+                if not is_captcha_page(new_content):
                     logger.info("CAPTCHA solved! Continuing...")
                     break
             except Exception as e:
@@ -93,6 +94,9 @@ async def run(playwright: Playwright, query: str):
                 await asyncio.sleep(1)
 
         # Wait for page to load after CAPTCHA solve
+        await page.wait_for_load_state("domcontentloaded")
+    else:
+        # No CAPTCHA - wait for initial page load
         await page.wait_for_load_state("domcontentloaded")
 
     # Single parsing point - parse the current page content (either after initial load or after CAPTCHA solve)
@@ -108,7 +112,7 @@ async def run(playwright: Playwright, query: str):
 
 def is_captcha_page(page_content: str) -> bool:
     """Check if page contains Google reCAPTCHA challenge"""
-    return 'id="captcha-form"' in page_content or 'id="recaptcha"' in page_content
+    return CAPTCHA_FORM_ID in page_content or RECAPTCHA_ID in page_content
 
 
 @mcp.tool()
