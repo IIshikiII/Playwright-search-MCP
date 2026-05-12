@@ -1,5 +1,4 @@
 from playwright.async_api import async_playwright, Playwright
-from time import sleep
 from urllib.parse import quote
 import os
 import logging
@@ -66,14 +65,13 @@ async def run(playwright: Playwright, query: str):
     logger.info("Browser successfully started")
 
     page = await browser.new_page()
-    query = query
     logger.info(f"Executing search query: \"{query}\"")
     await page.goto(f"https://www.google.com/search?q={quote(query)}")
     logger.info(f"Page loaded: {page.url}")
 
-    # Check for CAPTCHA page
+    # Check for CAPTCHA page and wait for resolution if needed
     page_content = await page.content()
-    if 'id="captcha-form"' in page_content or 'id="recaptcha"' in page_content:
+    if is_captcha_page(page_content):
         logger.warning("CAPTCHA detected! Solve it manually in the browser...")
 
         # Wait for CAPTCHA to be solved by monitoring page state
@@ -83,7 +81,7 @@ async def run(playwright: Playwright, query: str):
                 await page.wait_for_load_state("domcontentloaded", timeout=10000)
             except Exception:
                 pass  # Continue if no navigation is happening
-            
+
             try:
                 new_content = await page.content()
                 # Check if CAPTCHA is gone (no captcha form and recaptcha elements)
@@ -94,23 +92,10 @@ async def run(playwright: Playwright, query: str):
                 logger.debug(f"Page content not available yet: {e}")
                 await asyncio.sleep(1)
 
-        # Get fresh page content after CAPTCHA is solved
+        # Wait for page to load after CAPTCHA solve
         await page.wait_for_load_state("domcontentloaded")
-        page_content = await page.content()
-        results = parse_page(page_content)
-        logger.info(f"Extracted {len(results)} search results")
 
-        await browser.close()
-        logger.info("Browser closed")
-
-        return results
-
-    # other actions...
-    # with open("test.html", "w", encoding="utf8") as f:
-    #     f.write(await page.content())
-    # await asyncio.sleep(10)
-
-    logger.info("Parsing page content...")
+    # Single parsing point - parse the current page content (either after initial load or after CAPTCHA solve)
     page_content = await page.content()
     results = parse_page(page_content)
     logger.info(f"Extracted {len(results)} search results")
@@ -119,6 +104,11 @@ async def run(playwright: Playwright, query: str):
     logger.info("Browser closed")
 
     return results
+
+
+def is_captcha_page(page_content: str) -> bool:
+    """Check if page contains Google reCAPTCHA challenge"""
+    return 'id="captcha-form"' in page_content or 'id="recaptcha"' in page_content
 
 
 @mcp.tool()
