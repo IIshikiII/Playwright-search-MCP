@@ -12,3 +12,4 @@ profiles
 .env
 logs
 data
+.qwen

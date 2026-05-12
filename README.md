@@ -143,6 +143,39 @@ Logs are written to `logs/search.log` with the following format:
 
 ---
 
+## 🧪 Testing
+
+This project includes a comprehensive test suite using pytest and Playwright.
+
+### Test Structure
+
+- **`tests/test_parse_page.py`** — Unit tests for HTML parsing logic (8 tests)
+- **`tests/test_integration.py`** — Integration tests with real browser (3 tests, require `--slow --headed`)
+- **`tests/conftest.py`** — Pytest configuration and fixtures
+
+### Running Tests
+
+```bash
+# Run unit tests only (fast, no browser required)
+pytest tests/test_parse_page.py -v
+
+# Run all tests (unit + integration with visible browser for CAPTCHA handling)
+pytest tests/ -v --slow --headed
+```
+
+### Human-in-the-Middle Pattern
+
+For integration tests that may encounter CAPTCHA:
+
+1. Test detects CAPTCHA automatically by checking DOM elements
+2. Test pauses and waits for manual resolution in the browser window
+3. Automatic polling checks every second if CAPTCHA is gone
+4. Test continues automatically once CAPTCHA is solved
+
+> **Note**: Use `--slow --headed` to run tests with a visible browser window, allowing you to manually resolve CAPTCHA challenges. The `--slow` flag without `--headed` runs tests in headless mode where CAPTCHA cannot be solved manually.
+
+---
+
 ## 🏗️ Project Structure
 
 ```
