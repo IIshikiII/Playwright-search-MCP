@@ -1,6 +1,16 @@
 """pytest configuration and fixtures for plsearch tests."""
 
+import sys
+
 import pytest
+
+# Match main.py's Windows console encoding fix so tests can print non-ASCII
+# (e.g., the CAPTCHA warning emoji in wait_for_human_resolution) without
+# UnicodeEncodeError on cp1251-default consoles. pyproject.toml pins -s, so
+# stdout isn't captured by pytest and writes go straight to the terminal.
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
 def pytest_addoption(parser: "pytest.Parser") -> None:

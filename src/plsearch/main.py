@@ -8,18 +8,14 @@ import asyncio
 load_dotenv()
 
 from plsearch.parse_page import parse_page
-from plsearch.config import CAPTCHA_FORM_ID, RECAPTCHA_ID
-import json
+from plsearch.config import GOOGLE_SEARCH_URL, get_profile_path, is_captcha_page
 import sys
-
-from typing import Any
 
 # Fix Windows console encoding
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-import httpx
 from mcp.server.fastmcp import FastMCP
 
 # Настройка логирования
@@ -49,11 +45,8 @@ logger = logging.getLogger("web_search")
 
 mcp = FastMCP("Web_search")
 
-profile_path = os.getenv("PROFILE_DIR")
-
-
 async def run(playwright: Playwright, query: str):
-    user_data_dir = profile_path
+    user_data_dir = get_profile_path()
     logger.info(f"Profile data path: {user_data_dir}")
 
     chromium = playwright.chromium
@@ -67,7 +60,7 @@ async def run(playwright: Playwright, query: str):
 
     page = await browser.new_page()
     logger.info(f"Executing search query: \"{query}\"")
-    await page.goto(f"https://www.google.com/search?q={quote(query)}")
+    await page.goto(f"{GOOGLE_SEARCH_URL}{quote(query)}")
     logger.info(f"Page loaded: {page.url}")
 
     # Check for CAPTCHA page and wait for resolution if needed
@@ -110,11 +103,6 @@ async def run(playwright: Playwright, query: str):
     return results
 
 
-def is_captcha_page(page_content: str) -> bool:
-    """Check if page contains Google reCAPTCHA challenge"""
-    return CAPTCHA_FORM_ID in page_content or RECAPTCHA_ID in page_content
-
-
 @mcp.tool()
 async def Web_search(state: str) -> list[dict]:
     """Make google search query
@@ -131,12 +119,9 @@ async def Web_search(state: str) -> list[dict]:
         async with async_playwright() as playwright:
             search_results = await run(playwright, state)
 
-        logger.info("Formatting JSON response...")
-        result_json = json.dumps(search_results, indent=4, ensure_ascii=False)
         logger.info("Search request completed successfully")
         logger.info("=" * 60)
 
-        print(result_json)
         return search_results
     except Exception as e:
         logger.exception(f"Error during search request: {e}")

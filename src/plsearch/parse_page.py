@@ -2,6 +2,8 @@ import logging
 
 from bs4 import BeautifulSoup
 
+from plsearch.config import SNIPPET_CLASS
+
 logger = logging.getLogger("parse_page")
 
 
@@ -36,7 +38,7 @@ def parse_page(html: str) -> list[dict]:
             title = h3.get_text(strip=True)
             url = link["href"]
 
-            snippet_div = link.find_next("div", class_="VwiC3b")
+            snippet_div = link.find_next("div", class_=SNIPPET_CLASS)
             snippet = snippet_div.get_text(strip=True) if snippet_div else ""
 
             title = title.replace("\xa0", " ")

@@ -10,13 +10,8 @@ Run with: pytest tests/test_integration.py --slow
 import pytest
 from playwright.sync_api import Page
 
-from plsearch.config import GOOGLE_SEARCH_URL, CAPTCHA_FORM_ID, RECAPTCHA_ID
+from plsearch.config import GOOGLE_SEARCH_URL, is_captcha_page
 from plsearch.parse_page import parse_page
-
-
-def is_captcha_page(page_content: str) -> bool:
-    """Check if page contains Google reCAPTCHA challenge."""
-    return CAPTCHA_FORM_ID in page_content or RECAPTCHA_ID in page_content
 
 
 def wait_for_human_resolution(page: Page, timeout: int = 120) -> bool:

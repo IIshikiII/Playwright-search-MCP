@@ -13,3 +13,6 @@ profiles
 logs
 data
 .qwen
+.claude
+CLAUDE.md
+REFACTOR.md
