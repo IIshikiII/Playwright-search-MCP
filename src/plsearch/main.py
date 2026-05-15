@@ -3,12 +3,18 @@ from urllib.parse import quote
 import os
 import logging
 from dotenv import load_dotenv
-import asyncio
 
 load_dotenv()
 
 from plsearch.parse_page import parse_page
-from plsearch.config import GOOGLE_SEARCH_URL, get_profile_path, is_captcha_page
+from plsearch.config import (
+    GOOGLE_SEARCH_URL,
+    get_profile_path,
+    is_captcha_page,
+    wait_until_captcha_solved,
+)
+
+CAPTCHA_WAIT_TIMEOUT_SECONDS = 120.0
 import sys
 
 # Fix Windows console encoding
@@ -67,32 +73,14 @@ async def run(playwright: Playwright, query: str):
     page_content = await page.content()
     if is_captcha_page(page_content):
         logger.warning("CAPTCHA detected! Solve it manually in the browser...")
+        solved = await wait_until_captcha_solved(page, timeout=CAPTCHA_WAIT_TIMEOUT_SECONDS)
+        if not solved:
+            raise RuntimeError(
+                f"CAPTCHA was not solved within {CAPTCHA_WAIT_TIMEOUT_SECONDS}s"
+            )
+        logger.info("CAPTCHA solved! Continuing...")
 
-        # Wait for CAPTCHA to be solved by monitoring page state
-        while True:
-            try:
-                # Wait for any navigation to complete
-                await page.wait_for_load_state("domcontentloaded", timeout=10000)
-            except Exception:
-                pass  # Continue if no navigation is happening
-
-            try:
-                new_content = await page.content()
-                # Check if CAPTCHA is gone
-                if not is_captcha_page(new_content):
-                    logger.info("CAPTCHA solved! Continuing...")
-                    break
-            except Exception as e:
-                logger.debug(f"Page content not available yet: {e}")
-                await asyncio.sleep(1)
-
-        # Wait for page to load after CAPTCHA solve
-        await page.wait_for_load_state("domcontentloaded")
-    else:
-        # No CAPTCHA - wait for initial page load
-        await page.wait_for_load_state("domcontentloaded")
-
-    # Single parsing point - parse the current page content (either after initial load or after CAPTCHA solve)
+    await page.wait_for_load_state("domcontentloaded")
     page_content = await page.content()
     results = parse_page(page_content)
     logger.info(f"Extracted {len(results)} search results")

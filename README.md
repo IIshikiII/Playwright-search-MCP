@@ -138,11 +138,18 @@ This project includes a comprehensive test suite using pytest and Playwright.
 
 ```bash
 # Run unit tests only (fast, no browser required)
-pytest tests/test_parse_page.py -v
+pytest tests/ --ignore=tests/test_integration.py -v
 
-# Run all tests (unit + integration with visible browser for CAPTCHA handling)
-pytest tests/ -v --slow --headed
+# Run integration tests with visible browser (CAPTCHA-capable)
+pytest tests/test_integration.py -v --slow --headed
 ```
+
+> **Why two invocations?** `pytest-playwright`'s synchronous `page` fixture (used
+> by integration tests) and `pytest-asyncio`'s test loop (used by `main.run` mock
+> tests) can't share the same Python event loop on the same thread. Mixing them
+> in a single `pytest tests/ --slow --headed` invocation causes the async unit
+> tests to fail with `Cannot run the event loop while another loop is running`.
+> Running them in separate processes sidesteps the conflict.
 
 ### Human-in-the-Middle Pattern
 

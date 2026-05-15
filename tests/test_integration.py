@@ -53,6 +53,23 @@ def wait_for_human_resolution(page: Page, timeout: int = 120) -> bool:
     return False
 
 
+def _settle_after_possible_captcha(page: Page) -> str:
+    """Return final page content, handling CAPTCHA if Google challenges us.
+
+    Skips the calling test if CAPTCHA appears and isn't solved within the
+    polling timeout. The returned string is guaranteed to be from a
+    non-CAPTCHA page so callers can run shape/results assertions on it.
+    """
+    page.wait_for_load_state("domcontentloaded")
+    page_content = page.content()
+    if is_captcha_page(page_content):
+        if not wait_for_human_resolution(page, timeout=120):
+            pytest.skip("CAPTCHA not solved within timeout")
+        page.wait_for_load_state("domcontentloaded")
+        page_content = page.content()
+    return page_content
+
+
 @pytest.mark.slow
 def test_google_search_flow(page: Page) -> None:
     """Test complete Google search flow with real browser.
@@ -65,24 +82,7 @@ def test_google_search_flow(page: Page) -> None:
     search_query = "python playwright tutorial"
     page.goto(f"{GOOGLE_SEARCH_URL}{search_query}")
 
-    # Wait for page to load
-    page.wait_for_load_state("domcontentloaded")
-
-    # Check for CAPTCHA
-    page_content = page.content()
-    if is_captcha_page(page_content):
-        # Wait for human to resolve CAPTCHA (automatic polling)
-        resolved = wait_for_human_resolution(page, timeout=120)
-        if not resolved:
-            pytest.skip("Test skipped: CAPTCHA not solved within timeout")
-
-        # Wait for page to reload after CAPTCHA solve
-        page.wait_for_load_state("domcontentloaded")
-
-        # Get fresh page content
-        page_content = page.content()
-
-    # Parse results
+    page_content = _settle_after_possible_captcha(page)
     results = parse_page(page_content)
 
     # Verify we got some results
@@ -100,22 +100,23 @@ def test_google_search_flow(page: Page) -> None:
 
 @pytest.mark.slow
 def test_google_search_with_special_characters(page: Page) -> None:
-    """Test Google search with special characters in query."""
+    """Special-character queries still yield parseable Google results."""
     search_query = "test+query&special=chars"
     page.goto(f"{GOOGLE_SEARCH_URL}{search_query}")
 
-    page.wait_for_load_state("domcontentloaded")
+    page_content = _settle_after_possible_captcha(page)
+    results = parse_page(page_content)
 
-    # Just verify page loaded without error
-    assert "google.com" in page.url.lower() or "google" in page.title().lower()
+    assert "google" in page.url.lower()
+    assert len(results) > 0, "Expected at least one result for a special-char query"
 
 
 @pytest.mark.slow
 def test_empty_search_query(page: Page) -> None:
-    """Test handling of empty search query."""
+    """An empty `q=` lands on a real Google page (not the CAPTCHA wall)."""
     page.goto(GOOGLE_SEARCH_URL)
 
-    page.wait_for_load_state("domcontentloaded")
+    page_content = _settle_after_possible_captcha(page)
 
-    # Google should redirect to home page or show search results
-    assert "google" in page.url.lower() or "google" in page.title().lower()
+    assert "google" in page.url.lower()
+    assert not is_captcha_page(page_content), "Landed on the CAPTCHA wall, not Google"
