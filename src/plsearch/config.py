@@ -21,6 +21,13 @@ RECAPTCHA_ID = "recaptcha"
 # Google result-page selectors
 SNIPPET_CLASS = "VwiC3b"
 
+# Google pagination: results-per-page is what Google ships by default; the
+# walker advances `start` by this amount per page (start=0, 10, 20, ...).
+# MAX_PAGES caps the walk — past page 10 Google's relevance drops off a cliff
+# and CAPTCHA frequency spikes, so there's little point chasing further.
+RESULTS_PER_PAGE = 10
+MAX_PAGES = 10
+
 
 def is_captcha_page(page_content: str) -> bool:
     """Check if page contains a Google reCAPTCHA challenge."""
@@ -71,3 +78,30 @@ def get_profile_path() -> str:
     if not value:
         raise RuntimeError("PROFILE_DIR is required (set it in .env)")
     return value
+
+
+_SINGLETON_FILES = ("SingletonLock", "SingletonCookie", "SingletonSocket")
+
+
+def cleanup_stale_profile_locks(user_data_dir: str) -> None:
+    """Remove Chrome's Singleton* files left behind by a killed process.
+
+    Chrome creates these on launch and removes them on clean shutdown. Their
+    presence means a prior Chrome was killed mid-flight; if we don't sweep
+    them first, the next launch refuses to start.
+
+    Process-level cleanup (killing the orphaned Chrome that left these
+    behind) is the SessionRegistry's job — see ``session.SessionRegistry``.
+    By the time this runs, the owning process is already dead.
+    """
+    base = Path(user_data_dir)
+    if not base.exists():
+        return
+    for name in _SINGLETON_FILES:
+        target = base / name
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.debug("Could not remove %s: %s", target, exc)

@@ -1,12 +1,13 @@
-"""Unit tests for plsearch.main: _search_once, run orchestration, Web_search."""
+"""Unit tests for plsearch.main: _search, run orchestration, Web_search."""
 
+import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from plsearch import main
-from plsearch.config import CAPTCHA_FORM_ID
+from plsearch.config import CAPTCHA_FORM_ID, MAX_PAGES, RESULTS_PER_PAGE
 
 
 CLEAN_HTML = """
@@ -18,13 +19,15 @@ CLEAN_HTML = """
 </body></html>
 """
 
+EMPTY_HTML = "<html><body></body></html>"
 CAPTCHA_HTML = f'<html><body><form id="{CAPTCHA_FORM_ID}"></form></body></html>'
 
 
 def _make_browser_mock(page_contents: list[str]) -> tuple[MagicMock, MagicMock]:
     """Build a BrowserContext mock whose page.content() yields the given sequence.
 
-    Returns (browser_mock, page_mock) so tests can assert on page-level cleanup.
+    Returns (browser_mock, page_mock) so tests can assert on page-level cleanup
+    and on the sequence of `goto` URLs.
     """
     page = MagicMock()
     page.goto = AsyncMock()
@@ -78,31 +81,84 @@ def _ctx_with(app: _FakeAppContext) -> MagicMock:
     return ctx
 
 
-class TestSearchOnce:
-    async def test_no_captcha_returns_results(self) -> None:
+class TestSearch:
+    async def test_single_page_satisfies_limit(self) -> None:
+        # 2 content() calls per page (captcha check + post-load).
         browser, page = _make_browser_mock([CLEAN_HTML, CLEAN_HTML])
 
-        results = await main._search_once(browser, "q", wait_for_captcha=False)
+        results = await main._search(browser, "q", limit=2, wait_for_captcha=False)
 
         assert len(results) == 2
         assert results[0]["title"] == "Result One"
         page.close.assert_awaited_once()
+        page.goto.assert_awaited_once()
 
-    async def test_captcha_without_wait_returns_none(self) -> None:
+    async def test_walks_multiple_pages_to_fill_limit(self) -> None:
+        # Page 1: 2 results, Page 2: 2 results → limit 4 needs both pages.
+        browser, page = _make_browser_mock([CLEAN_HTML, CLEAN_HTML, CLEAN_HTML, CLEAN_HTML])
+
+        results = await main._search(browser, "q", limit=4, wait_for_captcha=False)
+
+        assert len(results) == 4
+        assert page.goto.await_count == 2
+        first_url = page.goto.await_args_list[0].args[0]
+        second_url = page.goto.await_args_list[1].args[0]
+        assert "start=0" in first_url
+        assert f"start={RESULTS_PER_PAGE}" in second_url
+
+    async def test_trims_to_limit_when_page_overshoots(self) -> None:
+        browser, page = _make_browser_mock([CLEAN_HTML, CLEAN_HTML])
+
+        results = await main._search(browser, "q", limit=1, wait_for_captcha=False)
+
+        assert len(results) == 1
+        page.goto.assert_awaited_once()
+
+    async def test_stops_when_page_returns_no_results(self) -> None:
+        # Page 1: 2 real results, Page 2: empty → walk stops early.
+        browser, page = _make_browser_mock([CLEAN_HTML, CLEAN_HTML, EMPTY_HTML, EMPTY_HTML])
+
+        results = await main._search(browser, "q", limit=20, wait_for_captcha=False)
+
+        assert len(results) == 2
+        assert page.goto.await_count == 2
+
+    async def test_respects_max_pages_cap(self) -> None:
+        # Enough content for many pages — verify walker stops at MAX_PAGES.
+        contents = [CLEAN_HTML] * (MAX_PAGES * 2 + 4)
+        browser, page = _make_browser_mock(contents)
+
+        results = await main._search(browser, "q", limit=1000, wait_for_captcha=False)
+
+        # Each CLEAN_HTML page contributes 2 results.
+        assert len(results) == MAX_PAGES * 2
+        assert page.goto.await_count == MAX_PAGES
+
+    async def test_captcha_on_first_page_returns_none(self) -> None:
         browser, page = _make_browser_mock([CAPTCHA_HTML])
 
-        result = await main._search_once(browser, "q", wait_for_captcha=False)
+        result = await main._search(browser, "q", limit=10, wait_for_captcha=False)
 
         assert result is None
         page.close.assert_awaited_once()
 
+    async def test_captcha_on_later_page_returns_partial(self) -> None:
+        # Page 1: 2 results. Page 2: captcha → bail, return the partial 2.
+        browser, page = _make_browser_mock([CLEAN_HTML, CLEAN_HTML, CAPTCHA_HTML])
+
+        results = await main._search(browser, "q", limit=20, wait_for_captcha=False)
+
+        assert len(results) == 2
+        assert page.goto.await_count == 2
+        page.close.assert_awaited_once()
+
     async def test_captcha_with_wait_solved_returns_results(self) -> None:
-        # First content() sees CAPTCHA, wait_until_captcha_solved patched to True,
-        # second content() (after wait_for_load_state) sees clean page.
+        # Captcha-check sees CAPTCHA, wait_until_captcha_solved patched to True,
+        # post-load content() sees clean page.
         browser, page = _make_browser_mock([CAPTCHA_HTML, CLEAN_HTML])
 
         with patch.object(main, "wait_until_captcha_solved", new=AsyncMock(return_value=True)) as wait_mock:
-            results = await main._search_once(browser, "q", wait_for_captcha=True)
+            results = await main._search(browser, "q", limit=2, wait_for_captcha=True)
 
         wait_mock.assert_awaited_once()
         assert len(results) == 2
@@ -113,16 +169,16 @@ class TestSearchOnce:
 
         with patch.object(main, "wait_until_captcha_solved", new=AsyncMock(return_value=False)):
             with pytest.raises(RuntimeError, match="CAPTCHA was not solved"):
-                await main._search_once(browser, "q", wait_for_captcha=True)
+                await main._search(browser, "q", limit=10, wait_for_captcha=True)
 
         page.close.assert_awaited_once()
 
     async def test_goto_failure_closes_page(self) -> None:
-        browser, page = _make_browser_mock([CLEAN_HTML, CLEAN_HTML])
+        browser, page = _make_browser_mock([CLEAN_HTML])
         page.goto = AsyncMock(side_effect=RuntimeError("network down"))
 
         with pytest.raises(RuntimeError, match="network down"):
-            await main._search_once(browser, "q", wait_for_captcha=False)
+            await main._search(browser, "q", limit=10, wait_for_captcha=False)
 
         page.close.assert_awaited_once()
 
@@ -133,7 +189,7 @@ class TestRun:
         headless, _ = _make_browser_mock([CLEAN_HTML, CLEAN_HTML])
         app = _FakeAppContext(headless_browser=headless)
 
-        results = await main.run(app, "q")
+        results = await main.run(app, "q", limit=2)
 
         assert len(results) == 2
         assert app.get_browser_calls == 1
@@ -141,15 +197,14 @@ class TestRun:
         assert app.hide_calls == 0
 
     async def test_captcha_in_headless_triggers_reveal_then_hide(self) -> None:
-        """Headless sees CAPTCHA → reveal headed → user solves → results parsed → hide."""
+        """Headless sees CAPTCHA on page 1 → reveal headed → user solves → hide."""
         headless, _ = _make_browser_mock([CAPTCHA_HTML])
-        # Headed: first content() is still CAPTCHA (page just navigated), wait runs,
-        # then post-wait content() is the clean page.
+        # Headed: captcha-check returns CAPTCHA, wait runs, post-load is clean.
         headed, _ = _make_browser_mock([CAPTCHA_HTML, CLEAN_HTML])
         app = _FakeAppContext(headless_browser=headless, headed_browser=headed)
 
         with patch.object(main, "wait_until_captcha_solved", new=AsyncMock(return_value=True)):
-            results = await main.run(app, "q")
+            results = await main.run(app, "q", limit=2)
 
         assert len(results) == 2
         assert app.reveal_calls == 1
@@ -163,10 +218,22 @@ class TestRun:
 
         with patch.object(main, "wait_until_captcha_solved", new=AsyncMock(return_value=False)):
             with pytest.raises(RuntimeError, match="CAPTCHA was not solved"):
-                await main.run(app, "q")
+                await main.run(app, "q", limit=10)
 
         assert app.reveal_calls == 1
         assert app.hide_calls == 1
+
+    async def test_partial_headless_results_skip_reveal(self) -> None:
+        """If headless already collected some results, accept the partial — don't reveal."""
+        # Page 1: 2 results. Page 2: captcha → _search returns partial 2.
+        headless, _ = _make_browser_mock([CLEAN_HTML, CLEAN_HTML, CAPTCHA_HTML])
+        app = _FakeAppContext(headless_browser=headless)
+
+        results = await main.run(app, "q", limit=20)
+
+        assert len(results) == 2
+        assert app.reveal_calls == 0
+        assert app.hide_calls == 0
 
 
 class TestAppContext:
@@ -238,11 +305,35 @@ class TestWebSearch:
         app = _FakeAppContext(headless_browser=headless)
         ctx = _ctx_with(app)
 
-        results = await main.Web_search("query", ctx)
+        results = await main.Web_search("query", ctx, limit=2)
 
         assert len(results) == 2
         assert results[0]["type"] == "web_search_result"
         assert {"type", "title", "url", "page_content", "page_age"} <= results[0].keys()
+
+    async def test_respects_custom_limit(self) -> None:
+        # Page 1: 2 results, Page 2: 2 results — limit 3 trims to 3.
+        headless, _ = _make_browser_mock([CLEAN_HTML, CLEAN_HTML, CLEAN_HTML, CLEAN_HTML])
+        app = _FakeAppContext(headless_browser=headless)
+        ctx = _ctx_with(app)
+
+        results = await main.Web_search("query", ctx, limit=3)
+
+        assert len(results) == 3
+
+    async def test_default_limit_is_ten(self) -> None:
+        sig = inspect.signature(main.Web_search)
+        assert sig.parameters["limit"].default == 10
+
+    async def test_invalid_limit_is_clamped_to_one(self) -> None:
+        headless, _ = _make_browser_mock([CLEAN_HTML, CLEAN_HTML])
+        app = _FakeAppContext(headless_browser=headless)
+        ctx = _ctx_with(app)
+
+        # limit=0 should clamp to 1, returning a single result.
+        results = await main.Web_search("query", ctx, limit=0)
+
+        assert len(results) == 1
 
     async def test_propagates_exception_after_logging(self, caplog: pytest.LogCaptureFixture) -> None:
         boom = RuntimeError("browser is gone")

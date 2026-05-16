@@ -2,9 +2,11 @@
 
 import pytest
 
+from plsearch import config
 from plsearch.config import (
     CAPTCHA_FORM_ID,
     RECAPTCHA_ID,
+    cleanup_stale_profile_locks,
     get_profile_path,
     is_captcha_page,
     wait_until_captcha_solved,
@@ -92,3 +94,29 @@ class TestWaitUntilCaptchaSolved:
     async def test_returns_true_immediately_when_no_captcha(self) -> None:
         page = _ScriptedPage(["<html>nothing to see here</html>"])
         assert await wait_until_captcha_solved(page, timeout=5.0, poll_interval=0.001) is True
+
+
+class TestCleanupStaleProfileLocks:
+    def test_unlinks_existing_singleton_files(self, tmp_path) -> None:
+        for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+            (tmp_path / name).write_text("stale")
+
+        cleanup_stale_profile_locks(str(tmp_path))
+
+        for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+            assert not (tmp_path / name).exists()
+
+    def test_leaves_unrelated_files_alone(self, tmp_path) -> None:
+        (tmp_path / "Preferences").write_text("user-data")
+        (tmp_path / "SingletonLock").write_text("stale")
+
+        cleanup_stale_profile_locks(str(tmp_path))
+
+        assert (tmp_path / "Preferences").exists()
+        assert not (tmp_path / "SingletonLock").exists()
+
+    def test_tolerates_missing_dir(self, tmp_path) -> None:
+        cleanup_stale_profile_locks(str(tmp_path / "nope"))  # no raise
+
+    def test_tolerates_missing_files(self, tmp_path) -> None:
+        cleanup_stale_profile_locks(str(tmp_path))  # no raise

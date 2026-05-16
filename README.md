@@ -11,6 +11,7 @@ A powerful **Google Search integration** powered by Playwright and MCP (Model Co
 ## 🚀 Features
 
 - **Google Search Query Execution** — Perform Google searches with natural language queries
+- **Multi-page Pagination** — Walks Google's `start=` offsets to collect up to `limit` results across pages
 - **Smart CAPTCHA Detection & Handling** — Automatically detects reCAPTCHA challenges and waits for manual resolution
 - **Persistent Browser Profile** — Maintains session state using Chrome user data directory
 - **JSON-RPC Response Format** — Returns structured, parseable search results
@@ -23,13 +24,14 @@ A powerful **Google Search integration** powered by Playwright and MCP (Model Co
 
 ```mermaid
 flowchart TD
-    A[Playwright Browser] --> B[Google Search]
-    B --> C[Parse HTML]
+    A[Playwright Browser] --> B["Google Search (start=N)"]
     B --> D{CAPTCHA?}
-    D --> E[Wait for Resolution]
-    E -.->|retry| B
-    C --> F[Results]
-    E --> F
+    D -->|yes| E[Reveal headed + wait for human]
+    D -->|no| C[Parse HTML]
+    E -->|solved| C
+    C --> G{"len(collected) ≥ limit<br/>or page empty<br/>or MAX_PAGES?"}
+    G -->|no| B
+    G -->|yes| F[Results]
 ```
 
 ---
@@ -69,10 +71,17 @@ Send a JSON-RPC request with:
 {
   "method": "Web_search",
   "params": {
-    "state": "your search query here"
+    "state": "your search query here",
+    "limit": 10
   }
 }
 ```
+
+`limit` is optional (defaults to 10). The server walks Google's pagination
+(`start=0, 10, 20, ...`) until `limit` results are collected, a page comes
+back empty, or 10 pages have been visited — so the effective ceiling is
+~100 results. Asking for 8 returns 8 from page 1; asking for 25 walks
+pages 1-3 and trims to 25.
 
 ### Response Format
 
