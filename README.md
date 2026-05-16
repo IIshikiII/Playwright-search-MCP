@@ -100,14 +100,20 @@ Send a JSON-RPC request with:
 
 ## 🔒 CAPTCHA Handling
 
-When Google detects automated activity, it presents a reCAPTCHA challenge. This tool handles CAPTCHA gracefully:
+The server keeps a single persistent Chrome context alive for its whole lifetime.
+By default the browser runs **headless** (no visible window). When Google challenges
+the session with reCAPTCHA, the server swaps to a **visible** browser so you can
+solve it manually, then swaps back to headless for the next request.
 
-1. **Detection** — Automatically identifies CAPTCHA pages via DOM element inspection
-2. **Notification** — Logs warning message: `CAPTCHA detected! Solve it manually in the browser...`
-3. **Waiting** — Polls the page every second, checking for CAPTCHA removal
-4. **Continuation** — Once solved, proceeds with parsing the search results
+1. **Detection** — Identifies CAPTCHA pages via DOM element inspection
+2. **Reveal** — Closes the headless browser, relaunches headed with the same
+   profile so cookies/session state carry over
+3. **Wait** — Polls the visible page every second, checking for CAPTCHA removal
+4. **Hide** — Once solved (or timed out), closes the visible browser and
+   relaunches headless. Subsequent requests are invisible again.
 
-> **Note**: The browser runs in visible mode (`headless=False`) so you can interact with the CAPTCHA.
+> Headless ↔ headed swaps cost a brief Chrome restart (~2-3s) and only happen
+> when CAPTCHA actually appears. Normal calls reuse the warm headless browser.
 
 ---
 
