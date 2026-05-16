@@ -189,7 +189,6 @@ playwirght/
 
 - **playwright** — Browser automation and CAPTCHA handling
 - **beautifulsoup4** — HTML parsing and result extraction
-- **httpx** — HTTP client for API requests
 - **mcp** — Model Context Protocol server framework
 - **python-dotenv** — Environment variable management
 

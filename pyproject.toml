@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "plsearch"
 version = "0.1.0"
@@ -7,8 +11,12 @@ requires-python = ">=3.13"
 dependencies = [
     "beautifulsoup4>=4.14.3",
     "dotenv>=0.9.9",
-    "httpx>=0.28.1",
     "mcp[cli]>=1.27.1",
+    "playwright>=1.59.0",
+]
+
+[dependency-groups]
+dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.26.0",
     "pytest-playwright>=0.7.2",
