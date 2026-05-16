@@ -45,6 +45,12 @@ def _make_playwright_mock(page_contents: list[str]) -> MagicMock:
 
 
 class TestRun:
+    @pytest.fixture(autouse=True)
+    def _profile_dir_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # main.run calls get_profile_path(), which now raises on empty.
+        # Keep these unit tests independent of the user's local .env.
+        monkeypatch.setenv("PROFILE_DIR", "/fake/profile/path")
+
     async def test_no_captcha_parses_immediately(self) -> None:
         # First content() = the pre-CAPTCHA check (clean), second = the final parse.
         playwright = _make_playwright_mock([CLEAN_HTML, CLEAN_HTML])

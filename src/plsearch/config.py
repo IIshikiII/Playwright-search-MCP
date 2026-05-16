@@ -61,5 +61,13 @@ def get_profile_path() -> str:
 
     Returns:
         str: Path to the Chrome user data directory.
+
+    Raises:
+        RuntimeError: If ``PROFILE_DIR`` is unset or empty. Without it Playwright
+            falls back to a temp dir and Google's CAPTCHA frequency spikes —
+            failing fast with a clear message beats an opaque downstream crash.
     """
-    return os.getenv("PROFILE_DIR", "")
+    value = os.getenv("PROFILE_DIR", "")
+    if not value:
+        raise RuntimeError("PROFILE_DIR is required (set it in .env)")
+    return value

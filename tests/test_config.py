@@ -56,13 +56,15 @@ class TestGetProfilePath:
         monkeypatch.setenv("PROFILE_DIR", "/some/profile/path")
         assert get_profile_path() == "/some/profile/path"
 
-    def test_returns_empty_string_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_raises_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("PROFILE_DIR", raising=False)
-        assert get_profile_path() == ""
+        with pytest.raises(RuntimeError, match="PROFILE_DIR is required"):
+            get_profile_path()
 
-    def test_returns_empty_string_when_explicitly_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_raises_when_explicitly_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("PROFILE_DIR", "")
-        assert get_profile_path() == ""
+        with pytest.raises(RuntimeError, match="PROFILE_DIR is required"):
+            get_profile_path()
 
 
 class TestWaitUntilCaptchaSolved:
