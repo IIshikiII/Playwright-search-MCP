@@ -5,8 +5,12 @@ import pytest
 from plsearch import config
 from plsearch.config import (
     CAPTCHA_FORM_ID,
+    DEFAULT_HOST,
+    DEFAULT_PORT,
     RECAPTCHA_ID,
     cleanup_stale_profile_locks,
+    get_http_host,
+    get_http_port,
     get_profile_path,
     is_captcha_page,
     wait_until_captcha_solved,
@@ -120,3 +124,29 @@ class TestCleanupStaleProfileLocks:
 
     def test_tolerates_missing_files(self, tmp_path) -> None:
         cleanup_stale_profile_locks(str(tmp_path))  # no raise
+
+
+class TestHttpSettings:
+    def test_default_host_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("PLSEARCH_HOST", raising=False)
+        assert get_http_host() == DEFAULT_HOST
+
+    def test_host_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("PLSEARCH_HOST", "0.0.0.0")
+        assert get_http_host() == "0.0.0.0"
+
+    def test_default_port_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("PLSEARCH_PORT", raising=False)
+        assert get_http_port() == DEFAULT_PORT
+
+    def test_port_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("PLSEARCH_PORT", "9090")
+        assert get_http_port() == 9090
+
+    def test_invalid_port_falls_back_to_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("PLSEARCH_PORT", "not-a-number")
+        assert get_http_port() == DEFAULT_PORT
+
+    def test_out_of_range_port_falls_back_to_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("PLSEARCH_PORT", "99999")
+        assert get_http_port() == DEFAULT_PORT

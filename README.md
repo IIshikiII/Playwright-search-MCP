@@ -57,11 +57,34 @@ cp .env.example .env
 
 ### Run as MCP Server
 
+The server uses **streamable-http** transport: one long-running process that
+multiple MCP clients (Claude Code, LM Studio, MCP Inspector, ...) connect to
+in parallel.
+
 ```bash
-python -m plsearch
+uv run python -m plsearch.main
 ```
 
-The server starts on stdio transport and waits for MCP requests.
+Default bind: `http://127.0.0.1:8765/mcp`. Leave the process running in a
+terminal (or set up Task Scheduler / a Windows service for autostart). The
+first MCP request lazily launches Chrome; subsequent requests reuse it.
+
+### Connecting clients
+
+**Claude Code** — add to `~/.claude.json`:
+
+```json
+{
+  "mcpServers": {
+    "WebSearch": { "url": "http://127.0.0.1:8765/mcp" }
+  }
+}
+```
+
+**LM Studio** — point its MCP config at the same URL.
+
+**MCP Inspector** — pick "Streamable HTTP" as the transport in the UI and
+paste `http://127.0.0.1:8765/mcp`.
 
 ### Query Format
 
@@ -83,6 +106,14 @@ back empty, or 10 pages have been visited — so the effective ceiling is
 ~100 results. Asking for 8 returns 8 from page 1; asking for 25 walks
 pages 1-3 and trims to 25.
 
+### Concurrency
+
+Multiple clients can be connected at once. Requests are **serialized** by
+an internal `asyncio.Lock` — only one search at a time, because the Chrome
+context is shared. A CAPTCHA reveal in one request blocks other requests
+until it's solved. Throughput is unchanged for single-client use; queue
+depth becomes visible only under genuine parallel load.
+
 ### Response Format
 
 ```json
@@ -103,7 +134,13 @@ pages 1-3 and trims to 25.
 
 | Environment Variable | Description | Default |
 |----------------------|-------------|---------|
-| `PROFILE_DIR` | Chrome user data directory for persistent sessions | - |
+| `PROFILE_DIR` | Chrome user data directory for persistent sessions | *(required)* |
+| `PLSEARCH_HOST` | Bind host for the HTTP server | `127.0.0.1` |
+| `PLSEARCH_PORT` | Bind port for the HTTP server | `8765` |
+
+> Binding `PLSEARCH_HOST=0.0.0.0` exposes the server to your network without
+> authentication. Don't do that unless you've put it behind a reverse proxy
+> with auth.
 
 ---
 

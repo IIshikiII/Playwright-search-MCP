@@ -28,6 +28,38 @@ SNIPPET_CLASS = "VwiC3b"
 RESULTS_PER_PAGE = 10
 MAX_PAGES = 10
 
+# HTTP transport settings. Defaults bind to loopback only — exposing the
+# server beyond 127.0.0.1 needs auth (FastMCP supports OAuth/token), which
+# this project doesn't configure. Override via PLSEARCH_HOST / PLSEARCH_PORT.
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8765
+
+
+def get_http_host() -> str:
+    """Return the bind host for the HTTP server (env override or default)."""
+    return os.getenv("PLSEARCH_HOST", DEFAULT_HOST)
+
+
+def get_http_port() -> int:
+    """Return the bind port for the HTTP server (env override or default).
+
+    Invalid PLSEARCH_PORT values fall back to ``DEFAULT_PORT`` with a log
+    line — silently using the default would mask a typo in the operator's
+    env file.
+    """
+    raw = os.getenv("PLSEARCH_PORT")
+    if raw is None:
+        return DEFAULT_PORT
+    try:
+        port = int(raw)
+    except ValueError:
+        logger.warning("PLSEARCH_PORT=%r is not an integer — using %d", raw, DEFAULT_PORT)
+        return DEFAULT_PORT
+    if not (1 <= port <= 65535):
+        logger.warning("PLSEARCH_PORT=%d out of range — using %d", port, DEFAULT_PORT)
+        return DEFAULT_PORT
+    return port
+
 
 def is_captcha_page(page_content: str) -> bool:
     """Check if page contains a Google reCAPTCHA challenge."""

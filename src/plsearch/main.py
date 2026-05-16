@@ -1,7 +1,8 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import quote
+import asyncio
 import atexit
 import logging
 import logging.handlers
@@ -22,6 +23,8 @@ from plsearch.config import (
     MAX_PAGES,
     RESULTS_PER_PAGE,
     cleanup_stale_profile_locks,
+    get_http_host,
+    get_http_port,
     get_profile_path,
     is_captcha_page,
     wait_until_captcha_solved,
@@ -46,31 +49,14 @@ class LineBufferedStreamHandler(logging.StreamHandler):
         self.flush()
 
 
-def _running_under_mcp_client() -> bool:
-    """True when our parent is feeding us JSON-RPC (stdin is a pipe, not a TTY).
-
-    MCP Inspector (issue #654, still open as of 0.21.2) forwards every line of
-    our stderr to the browser via SSE. After a Reconnect the SSE side is dead
-    but the proxy doesn't know it; the next stderr write throws "Not connected"
-    uncaught and the whole Node proxy crashes. Detecting "we're under a client"
-    lets us route logs to the file *only* in that mode, eliminating the trigger.
-    """
-    try:
-        return not sys.stdin.isatty()
-    except (AttributeError, OSError):
-        return True
-
-
 def _configure_logging() -> None:
     """Configure root logging for the MCP server process.
 
     Called from `main()` so that importing `plsearch.main` (e.g. from tests)
-    does not reconfigure the root logger as a side effect.
-
-    Under an MCP client the stderr handler is dropped — see
-    ``_running_under_mcp_client`` for the reasoning. Logs always go to the
-    rotating file, so ``tail -f src/logs/search.log`` is the way to watch
-    live output during stdio sessions.
+    does not reconfigure the root logger as a side effect. Logs go to both
+    the rotating file and stderr; under HTTP transport stdout is not a JSON-RPC
+    channel, so stderr is safe (unlike the prior stdio mode which had to
+    suppress it to dodge MCP Inspector bug #654).
 
     FastMCP installs a ``RichHandler`` on the root logger when its module is
     imported, before we get here. ``basicConfig`` is a no-op once handlers
@@ -98,10 +84,9 @@ def _configure_logging() -> None:
     file_handler.setFormatter(formatter)
     root.addHandler(file_handler)
 
-    if not _running_under_mcp_client():
-        stream_handler = LineBufferedStreamHandler()
-        stream_handler.setFormatter(formatter)
-        root.addHandler(stream_handler)
+    stream_handler = LineBufferedStreamHandler()
+    stream_handler.setFormatter(formatter)
+    root.addHandler(stream_handler)
 
     root.setLevel(logging.DEBUG)
 
@@ -118,11 +103,17 @@ class AppContext:
     only one browser can use it at a time. The swap pattern below closes the
     current browser before relaunching in the other mode; cookies/session state
     persist on disk between swaps via `user_data_dir`.
+
+    Under HTTP transport multiple clients can hit the server in parallel. The
+    ``request_lock`` serializes ``run()`` calls so concurrent searches don't
+    share a page handle or have the browser yanked from under them by a
+    CAPTCHA reveal in another request. Single-client throughput is unchanged.
     """
 
     playwright: Playwright
     user_data_dir: str
     _browser: BrowserContext | None = None
+    request_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def get_browser(self) -> BrowserContext:
         """Return the cached browser, lazily launching headless if there is none."""
@@ -158,45 +149,77 @@ class AppContext:
         )
 
 
+# Process-singleton AppContext shared across all MCP sessions. FastMCP under
+# streamable-http opens a new MCP session per HTTP client; if each session
+# created its own Playwright + Chrome, they'd fight for the single
+# `user_data_dir` OS lock and only the first session would actually launch.
+# The singleton means: one Playwright, one Chrome, one profile — many MCP
+# sessions sharing the AppContext.request_lock for serialization.
+_playwright_singleton: Playwright | None = None
+_app_singleton: AppContext | None = None
+_singleton_init_lock: asyncio.Lock | None = None
+
+
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
-    """Start Playwright at server boot; launch Chrome lazily on first search.
+    """Per-session lifespan that returns the PROCESS-wide AppContext.
 
-    Chrome is NOT launched here — `AppContext.get_browser()` does it on demand.
-    Eager launch caused `TargetClosedError` on discovery-only connections
-    (MCP Inspector probes, rapid `/mcp` reconnects): the client closes stdio
-    before `launch_persistent_context` returns, the lifespan is cancelled
-    mid-launch, and Playwright kills the half-launched Chrome process. Lazy
-    launch shifts ~1-2s of startup to the first real `Web_search` call.
+    First MCP session in the process creates the singleton (Playwright start +
+    AppContext); subsequent sessions reuse it. No teardown on session exit —
+    that would close the shared Chrome under any other live sessions. Process
+    cleanup runs via atexit and SessionRegistry's next-start sweep.
+
+    Profile-mutex (kill prior server, clear Singleton locks) ran already in
+    ``main()`` before uvicorn bound the port — by the time lifespan fires for
+    the first session, that's done.
     """
-    user_data_dir = get_profile_path()
-    # Kill any prior server still holding the profile (MCP Inspector restart,
-    # Node-proxy crash, Task Manager kill all bypass our finalizer on Windows).
-    # The registry's claim() walks the prior PID's process tree, taking Chrome
-    # with it; the locks sweep then clears the filesystem turds Chrome leaves
-    # when force-killed. Both must happen *before* we touch Playwright.
-    registry = SessionRegistry(user_data_dir)
-    registry.claim()
-    cleanup_stale_profile_locks(user_data_dir)
-
-    logger.info("Lifespan: starting Playwright (profile=%s)", user_data_dir)
-    playwright = await async_playwright().start()
-    app = AppContext(playwright=playwright, user_data_dir=user_data_dir)
+    global _playwright_singleton, _app_singleton, _singleton_init_lock
+    # asyncio.Lock must be created inside a running loop; defer to first call.
+    if _singleton_init_lock is None:
+        _singleton_init_lock = asyncio.Lock()
+    async with _singleton_init_lock:
+        if _app_singleton is None:
+            user_data_dir = get_profile_path()
+            logger.info(
+                "First MCP session — starting shared Playwright (profile=%s)",
+                user_data_dir,
+            )
+            _playwright_singleton = await async_playwright().start()
+            _app_singleton = AppContext(
+                playwright=_playwright_singleton, user_data_dir=user_data_dir
+            )
     try:
-        yield app
+        yield _app_singleton
     finally:
-        logger.info("Lifespan: shutting down")
+        # Intentionally no shutdown here. Other live MCP sessions still hold
+        # references to the singleton; tearing down Chrome would crash their
+        # in-flight requests. Process-exit cleanup is the right scope.
+        pass
+
+
+async def _shutdown_singletons() -> None:
+    """Async teardown of the process singleton. Called from sync atexit via asyncio.run."""
+    global _playwright_singleton, _app_singleton
+    if _app_singleton is not None:
         try:
-            await app.shutdown()
-        finally:
-            try:
-                await playwright.stop()
-            finally:
-                cleanup_stale_profile_locks(user_data_dir)
-                registry.release()
+            await _app_singleton.shutdown()
+        except Exception:
+            logger.exception("AppContext shutdown failed")
+        _app_singleton = None
+    if _playwright_singleton is not None:
+        try:
+            await _playwright_singleton.stop()
+        except Exception:
+            logger.exception("Playwright stop failed")
+        _playwright_singleton = None
 
 
-mcp = FastMCP("Web_search", lifespan=lifespan)
+mcp = FastMCP(
+    "Web_search",
+    lifespan=lifespan,
+    host=get_http_host(),
+    port=get_http_port(),
+)
 
 
 async def _search(
@@ -271,20 +294,26 @@ async def _search(
 
 
 async def run(app: AppContext, query: str, limit: int) -> list[dict]:
-    """Headless-first multi-page search; falls back to visible Chrome on CAPTCHA."""
-    browser = await app.get_browser()
-    results = await _search(browser, query, limit, wait_for_captcha=False)
-    if results is not None:
-        return results
+    """Headless-first multi-page search; falls back to visible Chrome on CAPTCHA.
 
-    # Headless hit CAPTCHA on the first page with nothing in hand. Swap to a
-    # visible Chrome with the same profile, let the user solve, then always
-    # swap back to headless for the next call.
-    try:
-        headed = await app.reveal_for_captcha()
-        return await _search(headed, query, limit, wait_for_captcha=True)
-    finally:
-        await app.hide_after_captcha()
+    Serialized via ``app.request_lock`` so concurrent HTTP clients can't have
+    their ``page`` handle invalidated by a CAPTCHA-reveal browser swap
+    happening in another request.
+    """
+    async with app.request_lock:
+        browser = await app.get_browser()
+        results = await _search(browser, query, limit, wait_for_captcha=False)
+        if results is not None:
+            return results
+
+        # Headless hit CAPTCHA on the first page with nothing in hand. Swap to a
+        # visible Chrome with the same profile, let the user solve, then always
+        # swap back to headless for the next call.
+        try:
+            headed = await app.reveal_for_captcha()
+            return await _search(headed, query, limit, wait_for_captcha=True)
+        finally:
+            await app.hide_after_captcha()
 
 
 @mcp.tool()
@@ -323,6 +352,14 @@ def _install_process_cleanup(user_data_dir: str) -> None:
     registry = SessionRegistry(user_data_dir)
 
     def _cleanup() -> None:
+        # Close the shared Chrome / Playwright if we ever spun them up.
+        # asyncio.run is safe here: uvicorn's loop is already stopped by the
+        # time atexit fires, so this gets a fresh loop.
+        if _app_singleton is not None or _playwright_singleton is not None:
+            try:
+                asyncio.run(_shutdown_singletons())
+            except Exception:
+                logger.exception("atexit singleton shutdown failed")
         try:
             cleanup_stale_profile_locks(user_data_dir)
         except Exception:
@@ -350,9 +387,22 @@ def _install_process_cleanup(user_data_dir: str) -> None:
 
 def main():
     _configure_logging()
-    _install_process_cleanup(get_profile_path())
-    logger.info("Starting MCP server on stdio transport")
-    mcp.run(transport="stdio")
+    user_data_dir = get_profile_path()
+
+    # Profile-mutex BEFORE uvicorn binds the port. lifespan() runs lazily
+    # under streamable-http (on first MCP session), so we can't put this
+    # there — by the time lifespan fires, port-bind has already crashed
+    # against any zombie server still owning :8765.
+    SessionRegistry(user_data_dir).claim()
+    cleanup_stale_profile_locks(user_data_dir)
+
+    _install_process_cleanup(user_data_dir)
+    host, port = get_http_host(), get_http_port()
+    logger.info(
+        "Starting MCP server on streamable-http transport at http://%s:%d/mcp",
+        host, port,
+    )
+    mcp.run(transport="streamable-http")
 
 
 if __name__ == "__main__":

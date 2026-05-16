@@ -1,5 +1,6 @@
 """Unit tests for plsearch.main: _search, run orchestration, Web_search."""
 
+import asyncio
 import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -47,6 +48,9 @@ class _FakeAppContext:
     Tracks call counts so we can assert reveal/hide are invoked exactly when
     expected. If `headed_browser` is None and `reveal_for_captcha` is called,
     the test will fail loudly.
+
+    Carries a real ``asyncio.Lock`` so ``run()`` can serialize against it the
+    same way it does against the production AppContext.
     """
 
     def __init__(
@@ -59,6 +63,7 @@ class _FakeAppContext:
         self.get_browser_calls = 0
         self.reveal_calls = 0
         self.hide_calls = 0
+        self.request_lock = asyncio.Lock()
 
     async def get_browser(self) -> MagicMock:
         self.get_browser_calls += 1
@@ -234,6 +239,44 @@ class TestRun:
         assert len(results) == 2
         assert app.reveal_calls == 0
         assert app.hide_calls == 0
+
+    async def test_concurrent_calls_are_serialized_by_request_lock(self) -> None:
+        """Two parallel run() calls must not interleave under request_lock.
+
+        Critical under HTTP transport: a CAPTCHA reveal in one request closes
+        and relaunches the shared BrowserContext; if a second request had its
+        ``page`` mid-flight, the handle would be invalid. Serialization keeps
+        each run()'s browser interaction atomic from get_browser() through
+        hide_after_captcha().
+        """
+        active = 0
+        peak = 0
+
+        async def tracking_get_browser():
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            # Yield so a competing task could run if not blocked by the lock.
+            await asyncio.sleep(0.01)
+            return browser_mock
+
+        browser_mock, _ = _make_browser_mock(
+            [CLEAN_HTML, CLEAN_HTML] * 2  # two run()s, two content() calls each
+        )
+        app = _FakeAppContext(headless_browser=browser_mock)
+        app.get_browser = tracking_get_browser
+
+        async def one_call():
+            try:
+                return await main.run(app, "q", limit=2)
+            finally:
+                nonlocal active
+                active -= 1
+
+        results = await asyncio.gather(one_call(), one_call())
+
+        assert all(len(r) == 2 for r in results)
+        assert peak == 1, f"expected serialized execution; saw peak concurrency {peak}"
 
 
 class TestAppContext:
