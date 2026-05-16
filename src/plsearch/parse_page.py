@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 
 from plsearch.config import SNIPPET_CLASS
 
-logger = logging.getLogger("parse_page")
+logger = logging.getLogger(__name__)
 
 
 def parse_page(html: str) -> list[dict]:
@@ -28,7 +28,7 @@ def parse_page(html: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
 
     links = list(soup.find_all("a", href=True))
-    logger.debug(f"Found {len(links)} links on page")
+    logger.debug("Found %d links on page", len(links))
 
     results = []
     parsed_count = 0
@@ -53,5 +53,9 @@ def parse_page(html: str) -> list[dict]:
             })
             parsed_count += 1
 
-    logger.info(f"Parsing completed: extracted {parsed_count} results from {len(links)} links")
+    logger.info(
+        "Parsing completed: extracted %d results from %d links",
+        parsed_count,
+        len(links),
+    )
     return results

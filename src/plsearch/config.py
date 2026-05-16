@@ -6,7 +6,7 @@ import os
 import time
 from pathlib import Path
 
-logger = logging.getLogger("plsearch.config")
+logger = logging.getLogger(__name__)
 
 # Base directory
 BASE_DIR = Path(__file__).resolve().parent.parent

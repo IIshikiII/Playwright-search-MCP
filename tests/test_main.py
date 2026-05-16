@@ -99,4 +99,12 @@ class TestWebSearch:
                 with pytest.raises(RuntimeError, match="playwright unavailable"):
                     await main.Web_search("query")
 
-        assert any("playwright unavailable" in rec.message for rec in caplog.records)
+        error_records = [
+            r for r in caplog.records
+            if r.levelname == "ERROR" and r.message == "Error during search request"
+        ]
+        assert error_records, "expected the error log line"
+        # logger.exception() attaches the live exc_info; the message itself is fixed
+        # (L4: don't duplicate str(exc) in the format string).
+        assert error_records[0].exc_info is not None
+        assert "playwright unavailable" in str(error_records[0].exc_info[1])
