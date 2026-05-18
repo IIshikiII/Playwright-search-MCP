@@ -23,9 +23,12 @@ dev = [
 ]
 
 
+[project.scripts]
+plsearch = "plsearch.cli:main"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
-packages = ["plsearch"]
+packages = ["plsearch", "plsearch.cli"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
