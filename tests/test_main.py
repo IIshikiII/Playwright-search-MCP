@@ -20,8 +20,28 @@ CLEAN_HTML = """
 </body></html>
 """
 
+PAGE2_HTML = """
+<html><body>
+  <a href="https://example.com/3"><h3>Result Three</h3></a>
+  <div class="VwiC3b">Third snippet</div>
+  <a href="https://example.com/4"><h3>Result Four</h3></a>
+  <div class="VwiC3b">Fourth snippet</div>
+</body></html>
+"""
+
 EMPTY_HTML = "<html><body></body></html>"
 CAPTCHA_HTML = f'<html><body><form id="{CAPTCHA_FORM_ID}"></form></body></html>'
+
+
+def _html_for_page(page_idx: int, *, count: int = 2) -> str:
+    """Build a Google-shaped HTML with unique URLs per page index."""
+    parts = ["<html><body>"]
+    for r in range(count):
+        url = f"https://example.com/p{page_idx}_r{r}"
+        parts.append(f'<a href="{url}"><h3>p{page_idx}_r{r}</h3></a>')
+        parts.append('<div class="VwiC3b">snippet</div>')
+    parts.append("</body></html>")
+    return "".join(parts)
 
 
 def _make_browser_mock(page_contents: list[str]) -> tuple[MagicMock, MagicMock]:
@@ -99,8 +119,8 @@ class TestSearch:
         page.goto.assert_awaited_once()
 
     async def test_walks_multiple_pages_to_fill_limit(self) -> None:
-        # Page 1: 2 results, Page 2: 2 results → limit 4 needs both pages.
-        browser, page = _make_browser_mock([CLEAN_HTML, CLEAN_HTML, CLEAN_HTML, CLEAN_HTML])
+        # Page 1: 2 results, Page 2: 2 different results → limit 4 needs both.
+        browser, page = _make_browser_mock([CLEAN_HTML, CLEAN_HTML, PAGE2_HTML, PAGE2_HTML])
 
         results = await main._search(browser, "q", limit=4, wait_for_captcha=False)
 
@@ -129,13 +149,15 @@ class TestSearch:
         assert page.goto.await_count == 2
 
     async def test_respects_max_pages_cap(self) -> None:
-        # Enough content for many pages — verify walker stops at MAX_PAGES.
-        contents = [CLEAN_HTML] * (MAX_PAGES * 2 + 4)
+        # Each page contributes 2 unique results (across pages too — see
+        # _html_for_page). Walker must stop at MAX_PAGES regardless of limit.
+        page_htmls = [_html_for_page(p) for p in range(MAX_PAGES + 2)]
+        # Two content() calls per page: captcha check + post-load.
+        contents = [html for html in page_htmls for _ in range(2)]
         browser, page = _make_browser_mock(contents)
 
         results = await main._search(browser, "q", limit=1000, wait_for_captcha=False)
 
-        # Each CLEAN_HTML page contributes 2 results.
         assert len(results) == MAX_PAGES * 2
         assert page.goto.await_count == MAX_PAGES
 
@@ -177,6 +199,63 @@ class TestSearch:
                 await main._search(browser, "q", limit=10, wait_for_captcha=True)
 
         page.close.assert_awaited_once()
+
+    async def test_dedups_urls_across_pages(self) -> None:
+        """Google reranks between &start=N offsets; the same URL can appear on
+        multiple pages. _search must dedup so the walker doesn't return phantom
+        duplicates and doesn't stop early thinking the limit was reached."""
+        page1 = """
+        <html><body>
+          <a href="https://example.com/a"><h3>Result A</h3></a>
+          <div class="VwiC3b">snippet A</div>
+          <a href="https://example.com/b"><h3>Result B</h3></a>
+          <div class="VwiC3b">snippet B</div>
+        </body></html>
+        """
+        # Page 2 repeats B (the dup) and introduces C.
+        page2 = """
+        <html><body>
+          <a href="https://example.com/b"><h3>Result B again</h3></a>
+          <div class="VwiC3b">snippet B</div>
+          <a href="https://example.com/c"><h3>Result C</h3></a>
+          <div class="VwiC3b">snippet C</div>
+        </body></html>
+        """
+        browser, page = _make_browser_mock([page1, page1, page2, page2])
+
+        results = await main._search(browser, "q", limit=3, wait_for_captcha=False)
+
+        urls = [r["url"] for r in results]
+        assert urls == [
+            "https://example.com/a",
+            "https://example.com/b",
+            "https://example.com/c",
+        ]
+        assert len(set(urls)) == len(urls), f"duplicates leaked: {urls}"
+        # Page 1 alone has only 2 unique hits; walker must fetch page 2 to fill limit=3.
+        assert page.goto.await_count == 2
+
+    async def test_dedups_urls_within_a_single_page(self) -> None:
+        """Google sometimes emits two <a> tags (e.g., thumbnail + title) for
+        the same result — same URL twice on one page. Dedup must catch that."""
+        page1 = """
+        <html><body>
+          <a href="https://example.com/a"><h3>A first link</h3></a>
+          <div class="VwiC3b">snippet A</div>
+          <a href="https://example.com/a"><h3>A duplicate link</h3></a>
+          <div class="VwiC3b">snippet A again</div>
+          <a href="https://example.com/b"><h3>Result B</h3></a>
+          <div class="VwiC3b">snippet B</div>
+        </body></html>
+        """
+        browser, page = _make_browser_mock([page1, page1])
+
+        # limit=2 stops the walker after page 1 (where both unique URLs live).
+        results = await main._search(browser, "q", limit=2, wait_for_captcha=False)
+
+        urls = [r["url"] for r in results]
+        assert urls == ["https://example.com/a", "https://example.com/b"]
+        page.goto.assert_awaited_once()
 
     async def test_goto_failure_closes_page(self) -> None:
         browser, page = _make_browser_mock([CLEAN_HTML])
@@ -355,8 +434,8 @@ class TestWebSearch:
         assert {"type", "title", "url", "page_content", "page_age"} <= results[0].keys()
 
     async def test_respects_custom_limit(self) -> None:
-        # Page 1: 2 results, Page 2: 2 results — limit 3 trims to 3.
-        headless, _ = _make_browser_mock([CLEAN_HTML, CLEAN_HTML, CLEAN_HTML, CLEAN_HTML])
+        # Page 1: 2 results, Page 2: 2 different results — limit 3 trims to 3.
+        headless, _ = _make_browser_mock([CLEAN_HTML, CLEAN_HTML, PAGE2_HTML, PAGE2_HTML])
         app = _FakeAppContext(headless_browser=headless)
         ctx = _ctx_with(app)
 

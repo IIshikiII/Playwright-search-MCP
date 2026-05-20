@@ -244,6 +244,7 @@ async def _search(
         True; raises ``RuntimeError`` on timeout.
     """
     collected: list[dict] = []
+    seen: set[str] = set()
     page = await browser.new_page()
     try:
         logger.info("Searching %r (limit=%d)", query, limit)
@@ -284,7 +285,13 @@ async def _search(
             if not page_results:
                 logger.info("Page %d returned no results — stopping walk", page_idx + 1)
                 break
-            collected.extend(page_results)
+            # Google reranks between &start=N offsets and can list the same URL
+            # multiple times within a page; dedup by URL so `collected` and the
+            # `len(collected) >= limit` guard count only unique hits.
+            for r in page_results:
+                if r["url"] not in seen:
+                    seen.add(r["url"])
+                    collected.append(r)
 
         results = collected[:limit]
         logger.info("Collected %d results (asked %d)", len(results), limit)
