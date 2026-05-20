@@ -63,9 +63,20 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _resolve_url(host: str | None, port: int | None) -> str:
-    """Build the `/mcp` endpoint URL from CLI flags + config defaults."""
+    """Build the `/mcp` endpoint URL from CLI flags + config defaults.
+
+    Maps the IPv4 wildcard ``0.0.0.0`` to ``127.0.0.1``: ``0.0.0.0`` is a
+    listen-only address — Windows ``connect()`` rejects it with WinError
+    10049, and Linux only "works" because the kernel quietly rewrites it to
+    loopback. Operators commonly set ``PLSEARCH_HOST=0.0.0.0`` so the
+    server binds to all interfaces; the local CLI then inherits the same
+    env and would build a broken connect URL. To hit a remote server, pass
+    its actual external address via ``--host``.
+    """
     resolved_host = host if host is not None else get_http_host()
     resolved_port = port if port is not None else get_http_port()
+    if resolved_host == "0.0.0.0":
+        resolved_host = "127.0.0.1"
     return f"http://{resolved_host}:{resolved_port}/mcp"
 
 

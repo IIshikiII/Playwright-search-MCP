@@ -62,12 +62,12 @@ class TestResolveUrl:
         monkeypatch.delenv("PLSEARCH_PORT", raising=False)
         assert _resolve_url(None, None) == "http://127.0.0.1:8765/mcp"
 
-    def test_env_overrides_propagate_through_config(
+    def test_non_wildcard_env_propagates_through_config(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("PLSEARCH_HOST", "0.0.0.0")
+        monkeypatch.setenv("PLSEARCH_HOST", "192.168.1.50")
         monkeypatch.setenv("PLSEARCH_PORT", "9090")
-        assert _resolve_url(None, None) == "http://0.0.0.0:9090/mcp"
+        assert _resolve_url(None, None) == "http://192.168.1.50:9090/mcp"
 
     def test_explicit_flags_beat_config(
         self, monkeypatch: pytest.MonkeyPatch
@@ -75,6 +75,26 @@ class TestResolveUrl:
         monkeypatch.setenv("PLSEARCH_HOST", "0.0.0.0")
         monkeypatch.setenv("PLSEARCH_PORT", "9090")
         assert _resolve_url("10.0.0.5", 1234) == "http://10.0.0.5:1234/mcp"
+
+    def test_wildcard_env_maps_to_loopback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Server is commonly bound to 0.0.0.0 (listen on all interfaces);
+        # the CLI must connect via 127.0.0.1 — Windows `connect(0.0.0.0)`
+        # errors with WinError 10049, and Linux silently maps to loopback.
+        # Port must propagate untouched.
+        monkeypatch.setenv("PLSEARCH_HOST", "0.0.0.0")
+        monkeypatch.setenv("PLSEARCH_PORT", "9090")
+        assert _resolve_url(None, None) == "http://127.0.0.1:9090/mcp"
+
+    def test_wildcard_flag_also_maps_to_loopback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An explicit --host 0.0.0.0 is just as broken as the env one;
+        # connecting to 0.0.0.0 is never the right answer, so map it too.
+        monkeypatch.delenv("PLSEARCH_HOST", raising=False)
+        monkeypatch.delenv("PLSEARCH_PORT", raising=False)
+        assert _resolve_url("0.0.0.0", None) == "http://127.0.0.1:8765/mcp"
 
 
 class TestUnwrapStructured:
