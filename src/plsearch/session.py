@@ -27,6 +27,8 @@ import sys
 import time
 from pathlib import Path
 
+import psutil
+
 logger = logging.getLogger(__name__)
 
 
@@ -118,6 +120,79 @@ def _descendants_unix(pid: int) -> list[int]:
     return found
 
 
+def _reap_orphan_chromes(
+    user_data_dir: str, *, skip_pids: set[int] | None = None,
+) -> int:
+    """Kill processes holding ``user_data_dir`` via ``--user-data-dir`` in cmdline.
+
+    SessionRegistry tracks the prior Python parent's PID, but Chrome is spawned
+    by Playwright into its own process group (Linux) / detached from the
+    parent (Windows). A hard kill of the Python parent (``taskkill /F /PID``
+    without ``/T``, Task Manager End Task, OOM) leaves Chrome alive holding the
+    OS-level profile lock — and the next ``launch_persistent_context`` hangs.
+
+    Scanning processes by ``--user-data-dir`` finds those orphans regardless of
+    PID lineage. By default the calling process and its full descendant tree
+    are skipped (recursive — covers venv-launcher shims that exec the real
+    interpreter as a grandchild, and the future Playwright Chrome which is
+    our descendant once launched). Re-entering ``claim()`` after Chrome
+    exists therefore can't kill our own browser; in the normal flow
+    ``claim()`` runs before any Chrome exists, so the skip is defensive.
+
+    ``skip_pids`` overrides that default — pass ``set()`` to disable the
+    self-skip entirely (only meaningful for test scaffolding where the
+    sentinel "orphan" is necessarily a child of the test process).
+
+    Returns the number of processes successfully killed. Never raises.
+    """
+    target = os.path.normpath(os.path.abspath(user_data_dir))
+    if skip_pids is None:
+        try:
+            skip_pids = {
+                p.pid for p in psutil.Process(os.getpid()).children(recursive=True)
+            }
+        except psutil.NoSuchProcess:
+            skip_pids = set()
+        skip_pids.add(os.getpid())
+    killed = 0
+
+    for proc in psutil.process_iter(["cmdline"]):
+        if proc.pid in skip_pids:
+            continue
+        info = proc.info or {}
+        cmdline = info.get("cmdline") or []
+        ud_arg = next(
+            (
+                a for a in cmdline
+                if isinstance(a, str) and a.startswith("--user-data-dir=")
+            ),
+            None,
+        )
+        if ud_arg is None:
+            continue
+        try:
+            ud_path = os.path.normpath(os.path.abspath(ud_arg.split("=", 1)[1]))
+        except (ValueError, OSError):
+            continue
+        if ud_path != target:
+            continue
+        try:
+            proc.kill()
+            killed += 1
+            logger.info(
+                "Killed orphan chrome pid=%d (--user-data-dir=%s)",
+                proc.pid, target,
+            )
+        except psutil.NoSuchProcess:
+            continue
+        except (psutil.AccessDenied, psutil.ZombieProcess) as exc:
+            logger.warning(
+                "Could not kill orphan chrome pid=%d: %s", proc.pid, exc,
+            )
+
+    return killed
+
+
 def _wait_for_exit(pid: int, timeout: float = 5.0, interval: float = 0.05) -> bool:
     """Block until ``pid`` is gone or ``timeout`` elapses."""
     deadline = time.monotonic() + timeout
@@ -193,6 +268,16 @@ class SessionRegistry:
                             "Prior server pid=%d did not exit within timeout",
                             prior_pid,
                         )
+        # Chrome lives in its own process group / detached from the Python
+        # parent, so killing the prior Python doesn't necessarily take its
+        # Chrome with it. Sweep by --user-data-dir to catch any orphan that
+        # still holds the profile lock, regardless of who its dead parent was.
+        reaped = _reap_orphan_chromes(str(self._profile_dir))
+        if reaped:
+            logger.info(
+                "Reaped %d orphan chrome process(es) holding %s",
+                reaped, self._profile_dir,
+            )
         self._write({"pid": os.getpid(), "started_at": time.time()})
 
     def release(self) -> None:

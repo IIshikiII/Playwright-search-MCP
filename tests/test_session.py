@@ -5,7 +5,9 @@ import os
 import subprocess
 import sys
 import time
+from unittest.mock import MagicMock, patch
 
+import psutil
 import pytest
 
 from plsearch.session import (
@@ -13,8 +15,32 @@ from plsearch.session import (
     _descendants_unix,
     _kill_process_tree,
     _process_alive,
+    _reap_orphan_chromes,
     _wait_for_exit,
 )
+
+
+def _spawn_with_user_data_dir(path) -> subprocess.Popen:
+    """Spawn a long-living sentinel process that carries ``--user-data-dir=path``
+    in its real argv — so psutil.cmdline() will see it on every platform."""
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import time; time.sleep(60)",
+            f"--user-data-dir={path}",
+        ]
+    )
+
+
+def _wait_dead(pid: int, timeout: float = 5.0) -> bool:
+    """Poll until ``pid`` is gone or ``timeout`` elapses."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _process_alive(pid):
+            return True
+        time.sleep(0.02)
+    return not _process_alive(pid)
 
 
 class TestProcessAlive:
@@ -75,6 +101,159 @@ class TestWaitForExit:
         finally:
             proc.kill()
             proc.wait(timeout=5)
+
+
+class TestReapOrphanChromes:
+    """Cross-platform reaper for Chrome processes holding our user-data-dir.
+
+    Uses real subprocesses (not mocks) for happy-path coverage so we exercise
+    the actual psutil-on-this-platform path. Each test cleans up its own
+    sentinels in a finally block — never leak processes across tests.
+    """
+
+    def test_returns_zero_when_nothing_matches(self, tmp_path) -> None:
+        # No sentinel spawned at all — scanner must walk every process and
+        # find none matching our profile path.
+        assert _reap_orphan_chromes(str(tmp_path / "unused")) == 0
+
+    def test_kills_process_holding_our_user_data_dir(self, tmp_path) -> None:
+        profile = tmp_path / "ours"
+        profile.mkdir()
+        proc = _spawn_with_user_data_dir(profile)
+        try:
+            # Give the kernel a beat to publish cmdline.
+            time.sleep(0.2)
+            assert _process_alive(proc.pid)
+
+            # skip_pids=set() overrides the default self-tree skip; the sentinel
+            # is our child only because pytest IS the calling process, which is
+            # an unavoidable test-scaffolding artifact, not the production case.
+            killed = _reap_orphan_chromes(str(profile), skip_pids=set())
+
+            assert killed >= 1, "expected to kill at least our sentinel"
+            assert _wait_dead(proc.pid), "sentinel did not die after kill()"
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+
+    def test_leaves_other_user_data_dirs_alone(self, tmp_path) -> None:
+        """Different `--user-data-dir` value → not our problem, don't kill."""
+        ours = tmp_path / "ours"
+        theirs = tmp_path / "theirs"
+        ours.mkdir()
+        theirs.mkdir()
+        proc = _spawn_with_user_data_dir(theirs)
+        try:
+            time.sleep(0.2)
+            assert _process_alive(proc.pid)
+
+            killed = _reap_orphan_chromes(str(ours), skip_pids=set())
+
+            assert killed == 0
+            assert _process_alive(proc.pid), \
+                "process holding an UNRELATED user-data-dir was killed"
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+
+    def test_normalizes_paths_before_comparing(self, tmp_path) -> None:
+        """`/foo/profile` and `/foo/./profile` refer to the same dir — match."""
+        profile = tmp_path / "profile"
+        profile.mkdir()
+        # Sentinel carries the cosmetically weird form.
+        weird = str(tmp_path / "." / "profile")
+        proc = _spawn_with_user_data_dir(weird)
+        try:
+            time.sleep(0.2)
+
+            killed = _reap_orphan_chromes(str(profile), skip_pids=set())
+
+            assert killed >= 1
+            assert _wait_dead(proc.pid)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+
+    def test_skips_direct_children_of_current_process(self, tmp_path) -> None:
+        """A stray re-claim() must NOT kill our own freshly-launched Chrome.
+
+        The sentinel we spawn IS a direct child of the test process; we use
+        that to assert the defensive skip-children-of-self rule.
+        """
+        profile = tmp_path / "mine"
+        profile.mkdir()
+        proc = _spawn_with_user_data_dir(profile)
+        try:
+            time.sleep(0.2)
+            assert _process_alive(proc.pid)
+
+            killed = _reap_orphan_chromes(str(profile))
+
+            assert killed == 0, \
+                "reaper killed a direct child of the calling process"
+            assert _process_alive(proc.pid)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+
+    def test_tolerates_process_disappearing_mid_scan(self, tmp_path) -> None:
+        """psutil raises NoSuchProcess if a process exits between enumeration
+        and cmdline read. Reaper must swallow it and keep going."""
+        # Stub one process that vanishes, plus one good match — the good one
+        # must still be killed.
+        good = MagicMock()
+        good.pid = 99998
+        good.info = {
+            "cmdline": ["/path/to/chrome", f"--user-data-dir={tmp_path}"],
+            "ppid": 1,
+        }
+        good.kill = MagicMock()
+
+        gone = MagicMock()
+        gone.pid = 99997
+        # Simulate cmdline disappearing.
+        gone.info = {"cmdline": None, "ppid": 1}
+
+        denied = MagicMock()
+        denied.pid = 99996
+        denied.info = {"cmdline": None, "ppid": 1}
+
+        with patch(
+            "plsearch.session.psutil.process_iter",
+            return_value=[gone, denied, good],
+        ):
+            killed = _reap_orphan_chromes(str(tmp_path))
+
+        assert killed == 1
+        good.kill.assert_called_once()
+
+    def test_logs_but_does_not_raise_when_kill_fails(self, tmp_path, caplog) -> None:
+        """If proc.kill() raises (e.g., AccessDenied on a root-owned process),
+        reaper must log a warning and keep its return-count honest."""
+        unkillable = MagicMock()
+        unkillable.pid = 99995
+        unkillable.info = {
+            "cmdline": ["chrome", f"--user-data-dir={tmp_path}"],
+            "ppid": 1,
+        }
+        unkillable.kill.side_effect = psutil.AccessDenied(pid=99995)
+
+        with patch(
+            "plsearch.session.psutil.process_iter",
+            return_value=[unkillable],
+        ):
+            with caplog.at_level("WARNING"):
+                killed = _reap_orphan_chromes(str(tmp_path))
+
+        assert killed == 0, "count should reflect successful kills only"
+        assert any(
+            "99995" in rec.message for rec in caplog.records
+            if rec.levelname == "WARNING"
+        ), "expected a warning naming the un-killable pid"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="pgrep is Unix-only")

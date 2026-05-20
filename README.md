@@ -47,13 +47,11 @@ uv run python -m plsearch.main
 
 > **Tested platforms:** Windows and macOS. Linux should work but is currently unverified.
 >
-> **Linux system requirement:** the server walks the prior process tree (Python + Chrome) on restart via `pgrep`, which lives in `procps` / `procps-ng`. It's pre-installed on most distros and on `:slim` images, but **not** on minimal bases like `alpine`. On those, install it before first run — otherwise a stuck Chrome from a hard-killed prior server will keep the profile locked and the next start will hang. Windows uses `taskkill` (always present) and macOS ships `pgrep` in the base system, so neither needs anything extra.
+> **Linux system requirement (soft):** Chrome cleanup on restart is handled cross-platform via `psutil` — no extra system packages needed for it. The legacy Python-tree walker still uses `pgrep` (from `procps` / `procps-ng`) to sweep any non-Chrome children of the prior server, which is normally empty for this project. `pgrep` is pre-installed on Debian/Ubuntu, `:slim` images, macOS, and FreeBSD. On minimal `alpine`-style images you can `apk add procps` for full belt-and-braces cleanup, but the server starts and recovers from orphan Chrome without it.
 >
 > ```bash
-> # Alpine
+> # Optional, only if you want the Python-tree walker on Alpine
 > apk add --no-cache procps
-> # Debian/Ubuntu slim (rarely needed — usually pre-installed)
-> apt-get install -y procps
 > ```
 
 The server binds to `http://127.0.0.1:8765/mcp` and stays up across client sessions. Leave it in a terminal, or wire it into systemd / Task Scheduler for autostart.
@@ -259,6 +257,7 @@ plsearch/
 | `beautifulsoup4`| HTML parsing (Google's `div.VwiC3b` snippets)              |
 | `mcp[cli]`      | FastMCP server + client primitives used by the CLI         |
 | `dotenv`        | Load `PROFILE_DIR` and friends from `.env`                 |
+| `psutil`        | Cross-platform orphan-Chrome reaper at server startup      |
 
 Managed by `uv` — `uv.lock` is the source of truth; do not hand-edit deps.
 
