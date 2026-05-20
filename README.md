@@ -33,12 +33,19 @@ cd plsearch
 uv sync
 uv run playwright install chrome     # one-time, if Chrome isn't on the host
 
-# 2. Point at a Chrome profile directory
-echo 'PROFILE_DIR="C:/Users/you/plsearch-profile"' > .env
+# 2. Prepare an empty directory for the Chrome profile and point at it
+#    The directory MUST be empty — Chrome will populate it on first launch.
+#    Example paths:
+#      Windows: C:/Users/you/plsearch-profile
+#      macOS:   /Users/you/plsearch-profile
+mkdir -p /Users/you/plsearch-profile
+echo 'PROFILE_DIR="/Users/you/plsearch-profile"' > .env
 
 # 3. Start the server
 uv run python -m plsearch.main
 ```
+
+> **Tested platforms:** Windows and macOS. Linux should work but is currently unverified.
 
 The server binds to `http://127.0.0.1:8765/mcp` and stays up across client sessions. Leave it in a terminal, or wire it into systemd / Task Scheduler for autostart.
 
@@ -165,7 +172,7 @@ flowchart TD
 
 | Variable        | Required | Default     | Purpose                                                            |
 |-----------------|----------|-------------|--------------------------------------------------------------------|
-| `PROFILE_DIR`   | yes      | —           | Absolute path to a Chrome user-data dir. Persists Google cookies between runs. |
+| `PROFILE_DIR`   | yes      | —           | Absolute path to an **empty** directory. Chrome creates its user-data profile here on first launch and persists Google cookies between runs. |
 | `PLSEARCH_HOST` | no       | `127.0.0.1` | Bind host for the HTTP server.                                     |
 | `PLSEARCH_PORT` | no       | `8765`      | Bind port for the HTTP server.                                     |
 
