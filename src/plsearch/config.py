@@ -76,6 +76,39 @@ def get_http_port() -> int:
     return port
 
 
+# Anti-burst throttle. LLM clients in research mode commonly fire 3+ searches
+# per second; Google reads that as a bot signature. Capping inter-request
+# start interval at MIN_INTERVAL seconds smooths the burst without affecting
+# normal single queries (their delta is naturally far larger). Set to 0.0
+# via env to disable.
+DEFAULT_MIN_INTERVAL_SECONDS = 2.0
+
+
+def get_min_interval_seconds() -> float:
+    """Return the minimum gap (seconds) between consecutive ``run()`` calls.
+
+    Negative or non-numeric values fall back to the default with a log warning.
+    A returned ``0.0`` disables throttling.
+    """
+    raw = os.getenv("PLSEARCH_MIN_INTERVAL_SECONDS")
+    if raw is None:
+        return DEFAULT_MIN_INTERVAL_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "PLSEARCH_MIN_INTERVAL_SECONDS=%r is not a float — using %s",
+            raw, DEFAULT_MIN_INTERVAL_SECONDS,
+        )
+        return DEFAULT_MIN_INTERVAL_SECONDS
+    if value < 0:
+        logger.warning(
+            "PLSEARCH_MIN_INTERVAL_SECONDS=%s is negative — using 0", value,
+        )
+        return 0.0
+    return value
+
+
 def is_captcha_page(page_content: str) -> bool:
     """Check if page contains a Google reCAPTCHA challenge."""
     return CAPTCHA_FORM_ID in page_content or RECAPTCHA_ID in page_content

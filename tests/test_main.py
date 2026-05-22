@@ -11,6 +11,18 @@ from plsearch import main
 from plsearch.config import CAPTCHA_FORM_ID, MAX_PAGES, RESULTS_PER_PAGE
 
 
+@pytest.fixture(autouse=True)
+def _disable_inter_request_throttle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default-disable the throttle so existing tests stay fast.
+
+    The throttle is exercised explicitly by ``TestThrottle`` (which sets its
+    own non-zero value). Everywhere else, two back-to-back ``run()``s in the
+    same test would otherwise pay the full ``DEFAULT_MIN_INTERVAL_SECONDS``
+    wall-clock wait.
+    """
+    monkeypatch.setenv("PLSEARCH_MIN_INTERVAL_SECONDS", "0")
+
+
 CLEAN_HTML = """
 <html><body>
   <a href="https://example.com/1"><h3>Result One</h3></a>
@@ -84,6 +96,7 @@ class _FakeAppContext:
         self.reveal_calls = 0
         self.hide_calls = 0
         self.request_lock = asyncio.Lock()
+        self.last_request_at = 0.0
 
     async def get_browser(self) -> MagicMock:
         self.get_browser_calls += 1
@@ -356,6 +369,65 @@ class TestRun:
 
         assert all(len(r) == 2 for r in results)
         assert peak == 1, f"expected serialized execution; saw peak concurrency {peak}"
+
+
+class TestThrottle:
+    """Min-interval throttle in `run()` — anti-burst guard against CAPTCHA.
+
+    Existing tests neutralize the throttle via the module-level autouse
+    fixture; this class overrides that env value for each test to exercise
+    the real throttle path.
+    """
+
+    async def test_first_call_does_not_sleep(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``last_request_at == 0.0`` means delta is huge — no throttle on the first call."""
+        monkeypatch.setenv("PLSEARCH_MIN_INTERVAL_SECONDS", "2.0")
+        headless, _ = _make_browser_mock([CLEAN_HTML, CLEAN_HTML])
+        app = _FakeAppContext(headless_browser=headless)
+
+        with patch.object(main.asyncio, "sleep", new=AsyncMock()) as sleep_mock:
+            await main.run(app, "q", limit=2)
+
+        assert sleep_mock.await_count == 0
+        assert app.last_request_at > 0.0
+
+    async def test_second_call_within_interval_sleeps(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If the second `run()` lands within MIN_INTERVAL of the first, it
+        must `asyncio.sleep(remainder)` before doing any browser work."""
+        monkeypatch.setenv("PLSEARCH_MIN_INTERVAL_SECONDS", "2.0")
+        # Two run()s, two content() calls each. The mock browser doesn't
+        # advance wall clock, so the second call is effectively "instant".
+        headless, _ = _make_browser_mock([CLEAN_HTML] * 4)
+        app = _FakeAppContext(headless_browser=headless)
+
+        sleep_mock = AsyncMock()
+        with patch.object(main.asyncio, "sleep", new=sleep_mock):
+            await main.run(app, "q", limit=2)
+            await main.run(app, "q", limit=2)
+
+        # First call: no sleep. Second call: one sleep with the throttle wait.
+        assert sleep_mock.await_count == 1
+        (wait,) = sleep_mock.await_args.args
+        # The mock advances time only via time.monotonic between the two
+        # set-last-request-at points (microseconds), so the wait should be
+        # very close to the full 2.0s interval.
+        assert 1.9 < wait <= 2.0
+
+    async def test_zero_interval_disables_throttle(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Operator escape hatch: 0.0 turns the throttle off entirely."""
+        monkeypatch.setenv("PLSEARCH_MIN_INTERVAL_SECONDS", "0")
+        headless, _ = _make_browser_mock([CLEAN_HTML] * 4)
+        app = _FakeAppContext(headless_browser=headless)
+
+        with patch.object(main.asyncio, "sleep", new=AsyncMock()) as sleep_mock:
+            await main.run(app, "q", limit=2)
+            await main.run(app, "q", limit=2)
+
+        assert sleep_mock.await_count == 0
 
 
 class TestAppContext:

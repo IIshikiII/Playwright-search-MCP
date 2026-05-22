@@ -9,6 +9,7 @@ import logging.handlers
 import os
 import signal
 import sys
+import time
 
 from dotenv import load_dotenv
 from playwright.async_api import BrowserContext, Playwright, async_playwright
@@ -27,6 +28,7 @@ from plsearch.config import (
     cleanup_stale_profile_locks,
     get_http_host,
     get_http_port,
+    get_min_interval_seconds,
     get_profile_path,
     is_captcha_page,
     wait_until_captcha_solved,
@@ -116,6 +118,11 @@ class AppContext:
     user_data_dir: str
     _browser: BrowserContext | None = None
     request_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # monotonic timestamp of the last `run()` entry; 0.0 means "never". Lives
+    # on AppContext (not run-local) so it survives across reveal/hide browser
+    # swaps — the throttle is about Google's view of our traffic, not browser
+    # lifecycle.
+    last_request_at: float = 0.0
 
     async def get_browser(self) -> BrowserContext:
         """Return the cached browser, lazily launching headless if there is none."""
@@ -312,6 +319,15 @@ async def run(app: AppContext, query: str, limit: int) -> list[dict]:
     happening in another request.
     """
     async with app.request_lock:
+        min_interval = get_min_interval_seconds()
+        if min_interval > 0:
+            elapsed = time.monotonic() - app.last_request_at
+            if elapsed < min_interval:
+                wait = min_interval - elapsed
+                logger.info("Throttling: sleeping %.2fs before next request", wait)
+                await asyncio.sleep(wait)
+        app.last_request_at = time.monotonic()
+
         browser = await app.get_browser()
         results = await _search(browser, query, limit, wait_for_captcha=False)
         if results is not None:
