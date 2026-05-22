@@ -34,6 +34,21 @@ MAX_PAGES = 10
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
+# Stealth: hide automation signals from Google's bot fingerprinter. Headless
+# Chrome ships UA with "HeadlessChrome" substring and sets
+# navigator.webdriver === true — both are top-tier bot signals that drive
+# CAPTCHA rate. Overriding UA + dropping the automation flag closes them.
+# Bump CHROME_USER_AGENT roughly twice a year: a UA more than ~6 months
+# behind Chrome stable becomes a signal of its own.
+CHROME_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/138.0.0.0 Safari/537.36"
+)
+CHROME_STEALTH_ARGS: tuple[str, ...] = (
+    "--disable-blink-features=AutomationControlled",
+)
+
 
 def get_http_host() -> str:
     """Return the bind host for the HTTP server (env override or default)."""

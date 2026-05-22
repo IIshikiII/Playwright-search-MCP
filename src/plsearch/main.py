@@ -17,6 +17,8 @@ load_dotenv()
 
 from plsearch.parse_page import parse_page
 from plsearch.config import (
+    CHROME_STEALTH_ARGS,
+    CHROME_USER_AGENT,
     GOOGLE_SEARCH_URL,
     LOG_DIR,
     LOG_FILE,
@@ -146,6 +148,8 @@ class AppContext:
             user_data_dir=self.user_data_dir,
             channel="chrome",
             headless=headless,
+            args=list(CHROME_STEALTH_ARGS),
+            user_agent=CHROME_USER_AGENT,
         )
 
 

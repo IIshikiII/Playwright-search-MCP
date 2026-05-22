@@ -407,6 +407,29 @@ class TestAppContext:
         # AppContext now holds the third browser.
         assert app._browser is b3
 
+    async def test_launch_passes_stealth_args_and_user_agent(self) -> None:
+        """Every launch must carry the anti-fingerprint flag and pinned UA.
+
+        These are the bits Google's bot detector reads first; if a future edit
+        drops one without thinking, CAPTCHA rate quietly spikes — pin them here.
+        """
+        playwright = MagicMock()
+        b1, b2 = MagicMock(), MagicMock()
+        b1.close = AsyncMock()
+        playwright.chromium.launch_persistent_context = AsyncMock(side_effect=[b1, b2])
+        app = main.AppContext(playwright=playwright, user_data_dir="/fake")
+
+        await app.get_browser()
+        await app.reveal_for_captcha()
+
+        calls = playwright.chromium.launch_persistent_context.await_args_list
+        assert len(calls) == 2
+        for call in calls:
+            assert "--disable-blink-features=AutomationControlled" in call.kwargs["args"]
+            ua = call.kwargs["user_agent"]
+            assert "Chrome/" in ua
+            assert "Headless" not in ua
+
     async def test_shutdown_closes_and_clears(self) -> None:
         playwright = MagicMock()
         browser = MagicMock()
