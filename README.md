@@ -273,11 +273,6 @@ Issues and PRs welcome. Quick orientation:
 
 A more detailed contributor guide for AI agents working in this repo lives in `CLAUDE.md` (gitignored locally — see git history if you're forking).
 
----
-
-## 📄 License
-
-MIT.
 
 ---
 
