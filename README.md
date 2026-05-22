@@ -4,7 +4,7 @@
 [![Playwright](https://img.shields.io/badge/Playwright-Chrome-2EAD33.svg)](https://playwright.dev)
 [![MCP](https://img.shields.io/badge/MCP-streamable--http-yellow.svg)](https://modelcontextprotocol.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#-license)
-[![Tests](https://img.shields.io/badge/tests-94%20passing-brightgreen.svg)](#-development)
+[![Tests](https://img.shields.io/badge/tests-109%20passing-brightgreen.svg)](#-development)
 
 > A free, local, browser-driven **Google Search** exposed as an MCP tool — drop-in replacement for paid web-search APIs in Claude Code, LM Studio, and any MCP-compatible client.
 
@@ -20,7 +20,7 @@
 - **Multi-page walk** — `limit` parameter pulls up to ~100 results across Google's `start=0,10,20,…` pagination on a single tab
 - **Multi-client** — one server, many concurrent MCP clients (Claude Code + LM Studio + Inspector); requests serialize on a shared browser
 - **Drop-in CLI** — `uv run plsearch "query"` for shell scripts and quick debugging
-- **Battle-tested** — 94 unit tests, integration tests against live Google, structured logging with rotation
+- **Battle-tested** — 109 unit tests, integration tests against live Google, structured logging with rotation
 
 ---
 
@@ -182,6 +182,7 @@ flowchart TD
 | `PROFILE_DIR`   | yes      | —           | Absolute path to an **empty** directory. Chrome creates its user-data profile here on first launch and persists Google cookies between runs. |
 | `PLSEARCH_HOST` | no       | `127.0.0.1` | Bind host for the HTTP server.                                     |
 | `PLSEARCH_PORT` | no       | `8765`      | Bind port for the HTTP server.                                     |
+| `PLSEARCH_MIN_INTERVAL_SECONDS` | no | `2.0` | Min seconds between consecutive searches (anti-burst throttle that smooths LLM bursts Google reads as bot traffic). Set `0` to disable. |
 
 > **Security note:** Setting `PLSEARCH_HOST=0.0.0.0` exposes the server to your network with no authentication. Only do this behind a reverse proxy that adds auth.
 
