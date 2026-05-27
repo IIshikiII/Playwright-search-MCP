@@ -54,12 +54,19 @@ def _process_alive(pid: int) -> bool:
         finally:
             kernel32.CloseHandle(handle)
     try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
+        proc = psutil.Process(pid)
+    except psutil.NoSuchProcess:
         return False
-    except PermissionError:
-        # Process exists but is owned by another user — alive enough for us.
+    try:
+        # Zombies hold no fds, locks, or ports — for our purposes (is the
+        # prior server still holding the profile?) they're dead. Without
+        # this check, `os.kill(pid, 0)` returns success for a zombie and
+        # callers wait until the parent reaps it.
+        return proc.status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
+    except psutil.AccessDenied:
+        # Owned by another user — exists, alive enough for us.
         return True
 
 
