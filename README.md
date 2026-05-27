@@ -8,6 +8,10 @@
 
 > A free, local, browser-driven **Google Search** exposed as an MCP tool — drop-in replacement for paid web-search APIs in Claude Code, LM Studio, and any MCP-compatible client.
 
+<p align="center">
+  <img src="docs/lmstudio.gif" alt="plsearch in LM Studio: the model invokes the Web_search MCP tool and answers from live Google results" />
+</p>
+
 `plsearch` is a long-running MCP server that drives a persistent Chrome profile through Playwright. It walks Google's pagination, parses results, and serves them over **streamable-http**. Headless by default; pops up a visible window only when Google challenges with reCAPTCHA so you can solve it once and keep going.
 
 ---
