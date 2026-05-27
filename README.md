@@ -4,7 +4,7 @@
 [![Playwright](https://img.shields.io/badge/Playwright-Chrome-2EAD33.svg)](https://playwright.dev)
 [![MCP](https://img.shields.io/badge/MCP-streamable--http-yellow.svg)](https://modelcontextprotocol.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](#-license)
-[![Tests](https://img.shields.io/badge/tests-109%20passing-brightgreen.svg)](#-development)
+[![tests](https://github.com/IIshikiII/Playwright-search-MCP/actions/workflows/test.yml/badge.svg)](https://github.com/IIshikiII/Playwright-search-MCP/actions/workflows/test.yml)
 
 > A free, local, browser-driven **Google Search** exposed as an MCP tool — drop-in replacement for paid web-search APIs in Claude Code, LM Studio, and any MCP-compatible client.
 
