@@ -45,7 +45,7 @@ echo 'PROFILE_DIR="/Users/you/plsearch-profile"' > .env
 uv run python -m plsearch.main
 ```
 
-> **Tested platforms:** Windows and macOS. Linux should work but is currently unverified.
+> **Tested platforms:** Windows, macOS, and Linux — all three exercised by CI on every push.
 >
 > **Linux system requirement (soft):** Chrome cleanup on restart is handled cross-platform via `psutil` — no extra system packages needed for it. The legacy Python-tree walker still uses `pgrep` (from `procps` / `procps-ng`) to sweep any non-Chrome children of the prior server, which is normally empty for this project. `pgrep` is pre-installed on Debian/Ubuntu, `:slim` images, macOS, and FreeBSD. On minimal `alpine`-style images you can `apk add procps` for full belt-and-braces cleanup, but the server starts and recovers from orphan Chrome without it.
 >
