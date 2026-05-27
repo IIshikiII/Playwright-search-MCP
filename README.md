@@ -177,6 +177,18 @@ flowchart TD
 
 ---
 
+## ⚠️ Caveats and limits
+
+`plsearch` automates a real Chrome session against Google's public search, which sits in a **gray area of Google's Terms of Service**. Google generally tolerates small, human-paced traffic from a persistent session, but doesn't formally permit automated access and can block it at any time. A few things worth knowing up front:
+
+- **Built for personal and development use.** Great as a local replacement for paid web-search APIs in your own AI client; not a fit as the backend of a product or a public bot.
+- **Pace yourself.** `PLSEARCH_MIN_INTERVAL_SECONDS` (default `2.0`) throttles bursts — a few queries per minute is a comfortable steady state.
+- **Quality depends on your IP and profile.** A regular browsing IP with a signed-in Google account hits very few CAPTCHAs; fresh VPS or corporate IPs see them sooner. The persistent profile helps a lot, but not infinitely.
+
+If you need an SLA, stability guarantees against Google's DOM changes, or scale beyond personal use, look at [Brave Search API](https://brave.com/search/api/), [Serper](https://serper.dev/), or [Tavily](https://tavily.com/) — they handle the legal and operational side for a per-query fee.
+
+---
+
 ## ⚙️ Configuration
 
 `.env` (gitignored):
